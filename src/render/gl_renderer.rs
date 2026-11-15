@@ -40,6 +40,8 @@ pub struct GlRenderer {
     pub particle_light_dir: Vec3,
     pub particle_light_intensity: f32,
     pub particle_ambient_intensity: f32,
+    cached_particle_tag: u64,
+    cached_mesh_tag: u64,
 }
 
 impl GlRenderer {
@@ -572,6 +574,8 @@ void main() {
                 particle_light_dir: Vec3::new(0.42, 0.82, 0.38).normalize(),
                 particle_light_intensity: 1.25,
                 particle_ambient_intensity: 0.32,
+                cached_particle_tag: 0,
+                cached_mesh_tag: 0,
             })
         }
     }
@@ -754,6 +758,7 @@ void main() {
     }
 
     /// Render particles and simulation bounds
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         gl: &Arc<glow::Context>,
@@ -770,6 +775,45 @@ void main() {
         faucets: &[Faucet],
         drains: &[Drain],
         is_2d: bool,
+    ) {
+        self.render_cached(
+            gl,
+            view,
+            proj,
+            viewport_size,
+            particle_radius,
+            fov_y,
+            particles_data,
+            lit_spheres,
+            chamber,
+            bounds,
+            colliders,
+            faucets,
+            drains,
+            is_2d,
+            0,
+        );
+    }
+
+    /// Render particles with optional VRAM VBO reuse (`cache_tag != 0`) for zero-upload orbiting on baked 3D replays.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_cached(
+        &mut self,
+        gl: &Arc<glow::Context>,
+        view: Mat4,
+        proj: Mat4,
+        viewport_size: [f32; 2],
+        particle_radius: f32,
+        fov_y: f32,
+        particles_data: &[ParticleVertex],
+        lit_spheres: bool,
+        chamber: &crate::sph::chamber::Chamber,
+        bounds: Aabb,
+        colliders: &[Collider],
+        faucets: &[Faucet],
+        drains: &[Drain],
+        is_2d: bool,
+        cache_tag: u64,
     ) {
         unsafe {
             if is_2d {
@@ -843,12 +887,15 @@ void main() {
                 gl.uniform_1_i32(u_is_2d.as_ref(), if is_2d { 1 } else { 0 });
 
                 gl.bind_vertex_array(Some(self.particle_vao));
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.particle_vbo));
-                gl.buffer_data_u8_slice(
-                    glow::ARRAY_BUFFER,
-                    bytemuck::cast_slice(particles_data),
-                    glow::DYNAMIC_DRAW,
-                );
+                if cache_tag == 0 || self.cached_particle_tag != cache_tag {
+                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.particle_vbo));
+                    gl.buffer_data_u8_slice(
+                        glow::ARRAY_BUFFER,
+                        bytemuck::cast_slice(particles_data),
+                        glow::DYNAMIC_DRAW,
+                    );
+                    self.cached_particle_tag = cache_tag;
+                }
 
                 gl.draw_arrays(glow::POINTS, 0, particles_data.len() as i32);
             }
@@ -866,6 +913,7 @@ void main() {
     }
 
     /// Render reconstructed 3D liquid surface mesh in real time with configured texture, color, and lighting.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_surface_mesh(
         &mut self,
         gl: &Arc<glow::Context>,
@@ -881,6 +929,44 @@ void main() {
         faucets: &[Faucet],
         drains: &[Drain],
         is_2d: bool,
+    ) {
+        self.render_surface_mesh_cached(
+            gl,
+            view,
+            proj,
+            eye_pos,
+            mesh,
+            mesh_cfg,
+            anim_time,
+            chamber,
+            bounds,
+            colliders,
+            faucets,
+            drains,
+            is_2d,
+            0,
+        );
+    }
+
+    /// Render reconstructed 3D liquid surface mesh with optional VRAM VBO/IBO reuse (`cache_tag != 0`)
+    /// so orbiting a baked 3D replay requires zero PCIe buffer uploads.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_surface_mesh_cached(
+        &mut self,
+        gl: &Arc<glow::Context>,
+        view: Mat4,
+        proj: Mat4,
+        eye_pos: Vec3,
+        mesh: &SurfaceMesh,
+        mesh_cfg: &SurfaceMeshConfig,
+        anim_time: f32,
+        chamber: &crate::sph::chamber::Chamber,
+        bounds: Aabb,
+        colliders: &[Collider],
+        faucets: &[Faucet],
+        drains: &[Drain],
+        is_2d: bool,
+        cache_tag: u64,
     ) {
         unsafe {
             gl.enable(glow::DEPTH_TEST);
@@ -979,18 +1065,23 @@ void main() {
                 gl.uniform_1_f32(u_exp.as_ref(), mesh_cfg.exposure);
 
                 gl.bind_vertex_array(Some(self.mesh_vao));
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.mesh_vbo));
-                gl.buffer_data_u8_slice(
-                    glow::ARRAY_BUFFER,
-                    bytemuck::cast_slice(&mesh.vertices),
-                    glow::DYNAMIC_DRAW,
-                );
-                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(self.mesh_ibo));
-                gl.buffer_data_u8_slice(
-                    glow::ELEMENT_ARRAY_BUFFER,
-                    bytemuck::cast_slice(&mesh.indices),
-                    glow::DYNAMIC_DRAW,
-                );
+                if cache_tag == 0 || self.cached_mesh_tag != cache_tag {
+                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.mesh_vbo));
+                    gl.buffer_data_u8_slice(
+                        glow::ARRAY_BUFFER,
+                        bytemuck::cast_slice(&mesh.vertices),
+                        glow::DYNAMIC_DRAW,
+                    );
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(self.mesh_ibo));
+                    gl.buffer_data_u8_slice(
+                        glow::ELEMENT_ARRAY_BUFFER,
+                        bytemuck::cast_slice(&mesh.indices),
+                        glow::DYNAMIC_DRAW,
+                    );
+                    self.cached_mesh_tag = cache_tag;
+                } else {
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(self.mesh_ibo));
+                }
 
                 gl.enable(glow::BLEND);
                 gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);

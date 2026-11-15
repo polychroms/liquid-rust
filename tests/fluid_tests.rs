@@ -2161,4 +2161,146 @@ fn test_gui_cli_grade_offline_quality_presets_and_timed_photo() {
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
 
+#[test]
+fn test_gui_interactive_3d_baked_replay_orbit_and_angle_export() {
+    use liquid_rust::{
+        BakedGeometry, CliRenderQuality, FluidMaterialPreset, GuidedRenderPreset, LiquidApp,
+        RenderAppearance, RenderMode, SimulationQuality, StudioRenderKind,
+    };
+    use std::time::{Duration, Instant};
+
+    let mut app = LiquidApp::new_headless();
+    app.set_quality(SimulationQuality::Draft);
+    let live_draft_pts = app.solver.particle_count();
+    let initial_first_pos = app.solver.particles[0].position;
+
+    // 1. Verify GuidedRenderPreset::Interactive3DReplay configures Free-Orbit 3D mode cleanly
+    app.apply_guided_render_preset(GuidedRenderPreset::Interactive3DReplay);
+    assert_eq!(app.render_kind, StudioRenderKind::Interactive3D);
+    assert_eq!(app.render_appearance, RenderAppearance::SmoothLiquid);
+    assert_eq!(app.render_sim_quality, Some(SimulationQuality::Ultra));
+    assert_eq!(app.cli_fps, 60);
+    let cli_3d = app.generate_render_tab_cli_command();
+    assert!(cli_3d.contains("--quality ultra"));
+    assert!(cli_3d.contains("--surface-mesh"));
+
+    // 2. Bake an Interactive 3D Replay in SmoothLiquid (SurfaceMesh) mode at higher particle density (Medium > Draft)
+    let tmp_dir = std::env::temp_dir().join("liquid_rust_baked_3d_orbit_test");
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    app.export_path = tmp_dir.to_string_lossy().into_owned();
+    app.render_sim_quality = Some(SimulationQuality::Medium);
+    app.gui_render_quality = CliRenderQuality::Standard;
+    app.video_width = 320;
+    app.video_height = 240;
+    app.cli_fps = 20;
+    app.cli_duration = 0.20; // 4 baked 3D frames
+    app.render_also_export_obj = false;
+    app.render_also_export_ply = false;
+    app.use_gpu = true;
+
+    app.start_gui_baked_3d_render_with_ctx(None);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if !app.bg_render.lock().unwrap().is_running {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Interactive 3D bake timed out");
+        std::thread::sleep(Duration::from_millis(15));
+    }
+
+    // Live 3D editor solver was NEVER touched (0 live physics steps!)
+    assert_eq!(app.solver.particle_count(), live_draft_pts);
+    assert_eq!(app.solver.particles[0].position, initial_first_pos);
+    assert_eq!(app.render_mode, RenderMode::Particles);
+
+    {
+        let g = app.bg_render.lock().unwrap();
+        assert_eq!(g.kind, StudioRenderKind::Interactive3D);
+        assert_eq!(g.completed_frames, 4);
+        assert_eq!(g.baked_frames.len(), 4);
+        assert!(g.baked_scene.is_some());
+        assert!(g.sim_particles_count > live_draft_pts);
+        for (fi, bf) in g.baked_frames.iter().enumerate() {
+            assert!(
+                bf.triangle_count > 100,
+                "Baked 3D frame {} should have non-empty surface mesh triangles (got {})",
+                fi,
+                bf.triangle_count
+            );
+            match &bf.geometry {
+                BakedGeometry::SurfaceMesh(m) => assert_eq!(m.triangle_count(), bf.triangle_count),
+                _ => panic!("Expected BakedGeometry::SurfaceMesh"),
+            }
+        }
+    }
+
+    // 3. Scrub to baked frame #3, snap Studio PNG from Camera Angle A, then orbit 90° and snap Angle B —
+    //    verifying free 3D camera orbiting & live material switching with ZERO physics recalculation!
+    app.anim_play_idx = 3;
+    let png_angle_a = tmp_dir.join("angle_a.png");
+    app.save_rendered_result_png_to_path(&png_angle_a);
+    assert!(png_angle_a.exists());
+    let bytes_a = std::fs::read(&png_angle_a).unwrap();
+
+    app.camera.azimuth += 1.45;
+    app.camera.elevation = (app.camera.elevation + 0.18).clamp(-1.2, 1.2);
+    let png_angle_b = tmp_dir.join("angle_b.png");
+    app.save_rendered_result_png_to_path(&png_angle_b);
+    assert!(png_angle_b.exists());
+    let bytes_b = std::fs::read(&png_angle_b).unwrap();
+    assert_ne!(
+        bytes_a, bytes_b,
+        "Orbiting the camera around the pre-calculated 3D fluid must render a genuinely different angle!"
+    );
+
+    // Live material relighting on already-baked 3D fluid without re-baking!
+    FluidMaterialPreset::LiquidChrome.apply(&mut app.mesh_config);
+    let png_chrome = tmp_dir.join("angle_b_chrome.png");
+    app.save_rendered_result_png_to_path(&png_chrome);
+    let bytes_chrome = std::fs::read(&png_chrome).unwrap();
+    assert_ne!(
+        bytes_b, bytes_chrome,
+        "Switching material preset live on baked 3D geometry must relight without re-running physics!"
+    );
+
+    // Export current baked 3D mesh to .obj
+    app.export_current_baked_obj();
+    let exported_obj = tmp_dir.join("baked_replay_frame_00003.obj");
+    assert!(exported_obj.exists(), "Baked .obj export must exist");
+    assert!(std::fs::metadata(&exported_obj).unwrap().len() > 500);
+
+    // 4. Also test Interactive 3D Replay in Droplets (ParticleSpheres) mode
+    app.render_appearance = RenderAppearance::ParticleSpheres;
+    app.cli_duration = 0.15; // 3 frames @ 20 FPS
+    app.start_gui_baked_3d_render_with_ctx(None);
+    let deadline_pts = Instant::now() + Duration::from_secs(30);
+    loop {
+        if !app.bg_render.lock().unwrap().is_running {
+            break;
+        }
+        assert!(Instant::now() < deadline_pts, "Particle 3D bake timed out");
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    {
+        let g = app.bg_render.lock().unwrap();
+        assert_eq!(g.baked_frames.len(), 3);
+        match &g.baked_frames[2].geometry {
+            BakedGeometry::Particles {
+                vertices, snaps, ..
+            } => {
+                assert!(!vertices.is_empty());
+                assert_eq!(vertices.len(), snaps.len());
+            }
+            _ => panic!("Expected BakedGeometry::Particles"),
+        }
+    }
+    app.anim_play_idx = 2;
+    let png_pts = tmp_dir.join("baked_droplets_angle.png");
+    app.save_rendered_result_png_to_path(&png_pts);
+    assert!(png_pts.exists());
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+
 

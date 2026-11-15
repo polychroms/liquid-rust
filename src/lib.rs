@@ -8,8 +8,8 @@ pub mod sph;
 pub mod updater;
 
 pub use app::{
-    AnimationStartSource, CentralView, GuidedRenderPreset, InspectorTab, LiquidApp,
-    RenderAppearance, StudioRenderKind,
+    AnimationStartSource, BakedGeometry, BakedReplayFrame, BakedSceneContext, CentralView,
+    GuidedRenderPreset, InspectorTab, LiquidApp, RenderAppearance, StudioRenderKind,
 };
 pub use export::{Mp4Encoder, PlyExporter, PngExporter, SoftwareRenderer};
 pub use gpu::{GpuRenderer, GpuSphSolver, GpuSurfaceField};
