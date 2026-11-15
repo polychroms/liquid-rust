@@ -13,7 +13,7 @@ A high-performance, real-time 3D fluid simulation engine written in Rust using P
 Install `liquid-rust` system-wide into `/bin` (both GUI & CLI, runnable from anywhere) with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
 ```
 
 Once installed, run `liquid-rust` from any directory — and update anytime via the built-in Studio GUI updater or CLI (`liquid-rust --update`).
@@ -84,41 +84,38 @@ Once installed, run `liquid-rust` from any directory — and update anytime via 
 
 ## 🚀 Installation & Quick Start
 
-### 📦 APT (Ubuntu / Debian / Linux Mint / Pop!_OS)
+### 🐧 Linux (`x86_64` & `ARM64` `.tar.gz` + `liquid-rust-install.sh`)
 
-#### Option 1: Native APT Repository
-Add the repository to receive automatic updates via `apt upgrade`:
+Every release ships clean universal tarballs for **Linux x86_64** and **Linux ARM64 (`aarch64`)**, each bundled with `liquid-rust-install.sh` (also available standalone):
+
 ```bash
-curl -fsSL https://rappar222.github.io/liquid-rust/setup-apt.sh | sudo bash
-sudo apt update
-sudo apt install liquid-rust
-```
+# Option A: One-line installer (auto-detects Linux x86_64 / ARM64 or macOS)
+curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
 
-#### Option 2: Download `.deb` Package
-```bash
-curl -LO https://github.com/rappar222/liquid-rust/releases/latest/download/liquid-rust_0.3.11_amd64.deb
-sudo apt install ./liquid-rust_0.3.11_amd64.deb
-```
-
----
-
-### 🚀 Portable AppImage (Runs on ANY Linux Distro)
-No installation required:
-```bash
-curl -LO https://github.com/rappar222/liquid-rust/releases/latest/download/liquid-rust-x86_64.AppImage
-chmod +x liquid-rust-x86_64.AppImage
-./liquid-rust-x86_64.AppImage
+# Option B: Manual tarball download & install (x86_64 shown; use liquid-rust-linux-aarch64.tar.gz for ARM64)
+curl -LO https://github.com/rappar222/liquid-rust/releases/latest/download/liquid-rust-linux-x86_64.tar.gz
+tar -xzf liquid-rust-linux-x86_64.tar.gz
+./liquid-rust-install.sh
 ```
 
 ---
 
-### 🏹 Arch Linux (AUR)
-Ready-to-use `PKGBUILD` scripts are provided in [`packaging/aur/`](packaging/aur/):
+### 🍎 macOS (Apple Silicon `arm64` & Intel `x86_64`)
+
 ```bash
-# Clone the binary package or build from source
-cd packaging/aur/liquid-rust-bin
-makepkg -si
+# Automatic install via liquid-rust-install.sh:
+curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
+
+# Or download the release archive manually:
+# Apple Silicon (M1–M4): liquid-rust-macos-arm64.tar.gz
+# Intel x86_64:          liquid-rust-macos-x86_64.tar.gz
 ```
+
+---
+
+### 🪟 Windows (`x86_64`)
+
+Download `liquid-rust-windows-x86_64.zip` from the [latest release (v0.3.27)](https://github.com/rappar222/liquid-rust/releases/latest), extract `liquid-rust.exe`, and launch directly or run from PowerShell/CMD.
 
 ---
 

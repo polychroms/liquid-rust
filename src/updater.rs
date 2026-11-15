@@ -294,18 +294,8 @@ pub fn cleanup_old_binary() {
     }
 }
 
-/// Resolve the actual on-disk binary to replace and relaunch (handling AppImage & Linux `/proc/self/exe` quirks).
+/// Resolve the actual on-disk binary to replace and relaunch (handling Linux `/proc/self/exe` quirks).
 pub fn resolve_target_executable_path() -> Result<PathBuf, String> {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(appimage) = std::env::var_os("APPIMAGE") {
-            let p = PathBuf::from(appimage);
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-    }
-
     let exe = std::env::current_exe()
         .map_err(|e| format!("Failed to locate current executable: {}", e))?;
 
@@ -323,27 +313,17 @@ pub fn resolve_target_executable_path() -> Result<PathBuf, String> {
 fn candidate_asset_names() -> Vec<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        let is_appimage = std::env::var_os("APPIMAGE").is_some();
         #[cfg(target_arch = "x86_64")]
         {
-            if is_appimage {
-                return vec![
-                    "liquid-rust-x86_64.AppImage",
-                    "liquid-rust-linux-x86_64.tar.gz",
-                    "liquid-rust",
-                ];
-            }
-            return vec!["liquid-rust-linux-x86_64.tar.gz", "liquid-rust"];
+            return vec!["liquid-rust-linux-x86_64.tar.gz"];
         }
         #[cfg(target_arch = "aarch64")]
         {
-            let _ = is_appimage;
-            return vec!["liquid-rust-linux-aarch64.tar.gz", "liquid-rust-aarch64"];
+            return vec!["liquid-rust-linux-aarch64.tar.gz"];
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
-            let _ = is_appimage;
-            return vec!["liquid-rust"];
+            return vec!["liquid-rust-linux-x86_64.tar.gz"];
         }
     }
 
@@ -924,5 +904,41 @@ mod tests {
         assert_eq!(compare_versions("v0.3.2", "0.3.2"), Ordering::Equal);
         assert_eq!(compare_versions("v0.3.1", "0.3.2"), Ordering::Less);
         assert_eq!(compare_versions("v1.0.0", "0.9.9"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_tar_gz_with_install_script_extracts_binary() {
+        let mut tar_buf = Vec::new();
+        {
+            let gz = flate2::write::GzEncoder::new(&mut tar_buf, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(gz);
+
+            let script = b"#!/usr/bin/env bash\necho installer\n";
+            let mut h1 = tar::Header::new_gnu();
+            h1.set_size(script.len() as u64);
+            h1.set_mode(0o755);
+            h1.set_cksum();
+            builder
+                .append_data(&mut h1, "liquid-rust-install.sh", &script[..])
+                .unwrap();
+
+            let mut fake_bin = vec![0u8; 70 * 1024];
+            fake_bin[..4].copy_from_slice(b"\x7fELF");
+            let mut h2 = tar::Header::new_gnu();
+            h2.set_size(fake_bin.len() as u64);
+            h2.set_mode(0o755);
+            h2.set_cksum();
+            builder
+                .append_data(&mut h2, "liquid-rust", &fake_bin[..])
+                .unwrap();
+
+            let gz = builder.into_inner().unwrap();
+            gz.finish().unwrap();
+        }
+
+        let extracted =
+            extract_binary_from_archive("liquid-rust-linux-x86_64.tar.gz", &tar_buf).unwrap();
+        assert_eq!(extracted.len(), 70 * 1024);
+        assert!(extracted.starts_with(b"\x7fELF"));
     }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Liquid-Rust system-wide installer
-# Downloads the latest release package from GitHub and installs `liquid-rust` into /bin
-# so `liquid-rust` can be executed from anywhere immediately.
+# Liquid-Rust system-wide installer (Linux x86_64 / ARM64 & macOS)
+# Works both standalone (downloads latest release tarball from GitHub) and offline
+# inside an extracted release archive containing `liquid-rust` + `liquid-rust-install.sh`.
 
 set -euo pipefail
 
@@ -14,10 +14,26 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
+FORCE_DOWNLOAD=0
+for arg in "$@"; do
+    case "$arg" in
+        --download|--online)
+            FORCE_DOWNLOAD=1
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--download]"
+            echo "  Installs liquid-rust to /bin (Linux) or /usr/local/bin (macOS)."
+            echo "  When run inside an extracted release folder alongside 'liquid-rust', installs locally."
+            echo "  Use --download (or curl ... | bash) to fetch the latest release from GitHub."
+            exit 0
+            ;;
+    esac
+done
+
 echo -e "${CYAN}${BOLD}"
 echo "============================================================"
 echo "          🌊 Liquid-Rust 3D/2D Fluid Simulator              "
-echo "             System-Wide GitHub Installer                   "
+echo "             System-Wide Installer                          "
 echo "============================================================"
 echo -e "${RESET}"
 
@@ -67,35 +83,53 @@ case "$OS_NAME" in
         ;;
 esac
 
-DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
 TMP_DIR="$(mktemp -d)"
 cleanup() {
     rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
-# 2. Download latest release package from GitHub
-echo -e "${YELLOW}⬇ Downloading latest package (${ASSET_NAME}) from GitHub...${RESET}"
-if command -v curl >/dev/null 2>&1; then
-    curl -fL --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$ASSET_NAME"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q --show-progress "$DOWNLOAD_URL" -O "$TMP_DIR/$ASSET_NAME"
-else
-    echo -e "${RED}Error: Neither 'curl' nor 'wget' is installed.${RESET}" >&2
-    exit 1
+# 2. Use bundled binary if invoked directly from an extracted tarball directory
+SCRIPT_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-# 3. Extract binary
-echo -e "${CYAN}⚙ Extracting package...${RESET}"
-tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$TMP_DIR"
-
-if [ ! -f "$TMP_DIR/liquid-rust" ]; then
-    echo -e "${RED}Error: Extracted archive did not contain 'liquid-rust' binary.${RESET}" >&2
-    exit 1
+SOURCE_BIN=""
+if [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/liquid-rust" ]; then
+    BIN_SIZE="$(wc -c < "$SCRIPT_DIR/liquid-rust" | tr -d '[:space:]')"
+    if [ "${BIN_SIZE:-0}" -ge 65536 ]; then
+        SOURCE_BIN="$SCRIPT_DIR/liquid-rust"
+        echo -e "${CYAN}⚙ Found extracted binary (${SOURCE_BIN}), installing locally...${RESET}"
+    fi
 fi
-chmod 0755 "$TMP_DIR/liquid-rust"
 
-# 4. Move binary into /bin (elevating with sudo when not running as root)
+# 3. Otherwise download and extract latest release tarball from GitHub
+if [ -z "$SOURCE_BIN" ]; then
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
+    echo -e "${YELLOW}⬇ Downloading latest package (${ASSET_NAME}) from GitHub...${RESET}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$ASSET_NAME"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --show-progress "$DOWNLOAD_URL" -O "$TMP_DIR/$ASSET_NAME"
+    else
+        echo -e "${RED}Error: Neither 'curl' nor 'wget' is installed.${RESET}" >&2
+        exit 1
+    fi
+
+    echo -e "${CYAN}⚙ Extracting package...${RESET}"
+    tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$TMP_DIR"
+
+    if [ ! -f "$TMP_DIR/liquid-rust" ]; then
+        echo -e "${RED}Error: Extracted archive did not contain 'liquid-rust' binary.${RESET}" >&2
+        exit 1
+    fi
+    SOURCE_BIN="$TMP_DIR/liquid-rust"
+fi
+
+chmod 0755 "$SOURCE_BIN"
+
+# 4. Install binary atomically into system bin directory
 TARGET_BIN="${TARGET_DIR}/liquid-rust"
 SUDO=""
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -109,8 +143,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
 fi
 
 $SUDO mkdir -p "$TARGET_DIR"
-# Stage and atomically mv into /bin so even an already-running instance is safely replaced
-$SUDO install -m 0755 "$TMP_DIR/liquid-rust" "${TARGET_BIN}.new"
+$SUDO install -m 0755 "$SOURCE_BIN" "${TARGET_BIN}.new"
 $SUDO mv -f "${TARGET_BIN}.new" "$TARGET_BIN"
 
 # 5. Install desktop application entry on Linux
