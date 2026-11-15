@@ -986,8 +986,17 @@ impl LiquidApp {
     }
 
     pub fn apply_fluid_preset(&mut self, preset: FluidPhysicsPreset) {
+        let was_zero_g = self.fluid_preset == FluidPhysicsPreset::ZeroG
+            || self.solver.config.gravity.length_squared() < 0.04;
         self.fluid_preset = preset;
         preset.apply(&mut self.solver.config);
+        // Restore normal Earth gravity when leaving ZeroG even if gravity was slightly tilted near zero.
+        if was_zero_g
+            && !matches!(preset, FluidPhysicsPreset::ZeroG | FluidPhysicsPreset::Custom)
+            && self.solver.config.gravity.y.abs() < 0.5
+        {
+            self.solver.config.gravity = Vec3::new(0.0, -9.81, 0.0);
+        }
         self.status_message = format!("Fluid substance: {}", preset.name());
     }
 
@@ -1034,14 +1043,22 @@ impl LiquidApp {
     }
 
     pub fn load_preset(&mut self, preset: ScenePreset) {
+        let prev_preset = self.current_preset;
         self.current_preset = preset;
         SceneGenerator::setup_scene(&mut self.solver, preset);
         if preset == ScenePreset::ObstacleDrop {
             self.sphere_obstacle_enabled = true;
         }
-        // Re-apply active non-default FluidPhysicsPreset (unless ZeroGravityBlobs explicitly overrides gravity)
+        // Re-apply active non-default FluidPhysicsPreset (unless ZeroGravityBlobs or switching out of ZeroG)
         if preset == ScenePreset::ZeroGravityBlobs {
             self.fluid_preset = FluidPhysicsPreset::ZeroG;
+        } else if self.fluid_preset == FluidPhysicsPreset::ZeroG && preset != prev_preset {
+            // Leaving Zero-G for a different normal scene restores scene gravity and Water defaults
+            // so 0 g does not persist across presets, while same-scene Reset/Quality/2D-3D keep ZeroG.
+            let scene_gravity = self.solver.config.gravity;
+            self.fluid_preset = FluidPhysicsPreset::Water;
+            self.fluid_preset.apply(&mut self.solver.config);
+            self.solver.config.gravity = scene_gravity;
         } else if self.fluid_preset != FluidPhysicsPreset::Water
             && self.fluid_preset != FluidPhysicsPreset::Custom
         {
@@ -3233,7 +3250,11 @@ impl LiquidApp {
                 base.viscosity = 0.08;
             }
             ScenePreset::VortexTornado => {
-                base.gravity = Vec3::new(0.0, -4.0, 0.0);
+                base.gravity = if self.is_2d {
+                    Vec3::ZERO
+                } else {
+                    Vec3::new(0.0, -6.0, 0.0)
+                };
                 base.viscosity = 0.04;
             }
             ScenePreset::ZeroGravityBlobs => {
@@ -7665,11 +7686,7 @@ impl eframe::App for LiquidApp {
                         .show_ui(ui, |ui| {
                             for &preset in ScenePreset::ALL {
                                 if ui
-                                    .selectable_value(
-                                        &mut self.current_preset,
-                                        preset,
-                                        preset.name(),
-                                    )
+                                    .selectable_label(self.current_preset == preset, preset.name())
                                     .clicked()
                                 {
                                     self.load_preset(preset);

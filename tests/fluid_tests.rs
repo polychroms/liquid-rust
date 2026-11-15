@@ -2302,5 +2302,83 @@ fn test_gui_interactive_3d_baked_replay_orbit_and_angle_export() {
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
 
+#[test]
+fn test_zero_g_preset_to_normal_preset_restores_gravity() {
+    use liquid_rust::sph::solver::FluidPhysicsPreset;
+    use liquid_rust::{LiquidApp, SimulationQuality};
+
+    let mut app = LiquidApp::new_headless();
+    app.set_quality(SimulationQuality::Draft);
+
+    // Baseline normal preset has Earth gravity.
+    assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::Water);
+
+    // 1. Switch to Zero-G scene preset -> 0 g and ZeroG fluid preset.
+    app.load_preset(ScenePreset::ZeroGravityBlobs);
+    assert_eq!(app.solver.config.gravity, Vec3::ZERO);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::ZeroG);
+    assert!((app.solver.config.tensile_k - 0.005).abs() < 1e-6);
+
+    // 2. Switch back to normal DamBreak -> Earth gravity and Water defaults are restored (0 g must NOT persist).
+    app.load_preset(ScenePreset::DamBreak);
+    assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::Water);
+    assert!(
+        app.solver.config.tensile_k < 0.003,
+        "tensile_k should reset from ZeroGravityBlobs (got {})",
+        app.solver.config.tensile_k
+    );
+    for _ in 0..8 {
+        app.solver.step(1.0 / 60.0);
+    }
+    let avg_vy: f32 =
+        app.solver.particles.iter().map(|p| p.velocity.y).sum::<f32>()
+            / app.solver.particles.len().max(1) as f32;
+    assert!(
+        avg_vy < -0.1,
+        "Fluid in normal preset after Zero-G must accelerate downward (avg_vy={})",
+        avg_vy
+    );
+
+    // 3. Switch ZeroGravityBlobs -> DropletSplash and ZeroGravityBlobs -> 3D VortexTornado.
+    app.load_preset(ScenePreset::ZeroGravityBlobs);
+    app.load_preset(ScenePreset::DropletSplash);
+    assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::Water);
+
+    app.load_preset(ScenePreset::ZeroGravityBlobs);
+    app.load_preset(ScenePreset::VortexTornado);
+    assert!((app.solver.config.gravity.y - (-6.0)).abs() < 1e-4);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::Water);
+
+    // 4. Selecting FluidPhysicsPreset::ZeroG on a normal scene:
+    //    - same-scene Reset (load_preset(DamBreak)) preserves ZeroG intentionally,
+    //    - switching to a DIFFERENT normal scene (DropletSplash) restores normal gravity,
+    //    - switching fluid substance from ZeroG (or near-zero gravity) to Water/Honey restores -9.81.
+    app.load_preset(ScenePreset::DamBreak);
+    app.apply_fluid_preset(FluidPhysicsPreset::ZeroG);
+    assert_eq!(app.solver.config.gravity, Vec3::ZERO);
+
+    app.load_preset(ScenePreset::DamBreak);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::ZeroG);
+    assert_eq!(app.solver.config.gravity, Vec3::ZERO);
+
+    app.load_preset(ScenePreset::DropletSplash);
+    assert_eq!(app.fluid_preset, FluidPhysicsPreset::Water);
+    assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
+
+    app.apply_fluid_preset(FluidPhysicsPreset::ZeroG);
+    assert_eq!(app.solver.config.gravity, Vec3::ZERO);
+    app.apply_fluid_preset(FluidPhysicsPreset::Water);
+    assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
+
+    // Near-zero tilted gravity also restores Earth gravity when picking a normal substance.
+    app.solver.config.gravity = Vec3::new(0.0, 0.05, 0.0);
+    app.apply_fluid_preset(FluidPhysicsPreset::Honey);
+    assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
+}
+
+
 
 

@@ -201,6 +201,8 @@ impl SceneGenerator {
 
         let spacing = solver.config.spacing;
         let wall_inset = (solver.config.particle_radius - 0.45 * spacing).max(0.0);
+        // Reset scene-overridden tensile pressure so ZeroGravityBlobs does not leak into normal presets.
+        solver.config.tensile_k = 0.001;
 
         if solver.is_2d {
             solver.config.rest_density =
