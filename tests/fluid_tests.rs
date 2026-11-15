@@ -2379,6 +2379,70 @@ fn test_zero_g_preset_to_normal_preset_restores_gravity() {
     assert!((app.solver.config.gravity.y - (-9.81)).abs() < 1e-4);
 }
 
+#[test]
+fn test_cli_copy_output_filename_customization_and_quoting() {
+    use liquid_rust::app::{CliCommandMode, LiquidApp, StudioRenderKind};
+    use liquid_rust::RenderMode;
+
+    let mut app = LiquidApp::new_headless();
+    assert!(!app.show_copy_cli_modal);
+    assert_eq!(app.cli_mode, CliCommandMode::Gui);
+
+    // 1. Opening Copy CLI modal from non-Render tabs defaults Gui -> Mp4Video so output name is editable.
+    app.open_copy_cli_modal(false);
+    assert!(app.show_copy_cli_modal);
+    assert!(!app.copy_cli_use_render_tab);
+    assert_eq!(app.cli_mode, CliCommandMode::Mp4Video);
+
+    // Extensionless name appends .mp4 cleanly in both CLI builders.
+    app.cli_mp4_output = "custom_splash".to_string();
+    app.render_kind = StudioRenderKind::Animation;
+    assert!(app
+        .generate_cli_command()
+        .contains("--export-mp4 custom_splash.mp4"));
+    assert!(app
+        .generate_render_tab_cli_command()
+        .contains("--export-mp4 custom_splash.mp4"));
+
+    // Paths containing spaces are quoted properly for shell execution.
+    app.cli_mp4_output = "my renders/cool wave".to_string();
+    assert!(app
+        .generate_cli_command()
+        .contains("--export-mp4 \"my renders/cool wave.mp4\""));
+    assert!(app
+        .generate_render_tab_cli_command()
+        .contains("--export-mp4 \"my renders/cool wave.mp4\""));
+
+    // 2. PNG Frame mode quotes paths with spaces and fills extension if omitted.
+    app.cli_mode = CliCommandMode::PngFrame;
+    app.render_kind = StudioRenderKind::StillFrame;
+    app.png_output_path = "frames/hero shot".to_string();
+    assert!(app
+        .generate_cli_command()
+        .contains("--export-png \"frames/hero shot.png\""));
+    assert!(app
+        .generate_render_tab_cli_command()
+        .contains("--export-png \"frames/hero shot.png\""));
+
+    // 3. Directory outputs (PLY / Interactive3D OBJ) preserve folder paths & quote spaces.
+    app.cli_mode = CliCommandMode::PlySequence;
+    app.render_kind = StudioRenderKind::Interactive3D;
+    app.render_mode = RenderMode::SurfaceMesh;
+    app.export_path = "studio exports".to_string();
+    assert!(app
+        .generate_cli_command()
+        .contains("--export-ply \"studio exports\""));
+    assert!(app
+        .generate_render_tab_cli_command()
+        .contains("--export-obj \"studio exports\""));
+
+    // 4. Opening Copy CLI modal from Studio Render tab selects Render tab source.
+    app.open_copy_cli_modal(true);
+    assert!(app.show_copy_cli_modal);
+    assert!(app.copy_cli_use_render_tab);
+}
+
+
 
 
 

@@ -60,6 +60,13 @@ impl CliCommandMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CliOutputTarget {
+    Mp4,
+    Png,
+    Dir,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InspectorTab {
     Scene,
     Physics,
@@ -674,6 +681,8 @@ pub struct LiquidApp {
     pub status_message: String,
     pub show_extreme_modal: bool,
     pub show_shortcuts_modal: bool,
+    pub show_copy_cli_modal: bool,
+    pub copy_cli_use_render_tab: bool,
     pub obj_file_path: String,
     pub obj_browse_pending: Arc<AtomicBool>,
     pub obj_browse_result: Arc<Mutex<Option<String>>>,
@@ -862,6 +871,8 @@ impl LiquidApp {
             status_message: "Ready".to_string(),
             show_extreme_modal: false,
             show_shortcuts_modal: false,
+            show_copy_cli_modal: false,
+            copy_cli_use_render_tab: false,
             obj_file_path: "model.obj".to_string(),
             obj_browse_pending: Arc::new(AtomicBool::new(false)),
             obj_browse_result: Arc::new(Mutex::new(None)),
@@ -1603,6 +1614,84 @@ impl LiquidApp {
         let _ = std::process::Command::new("explorer").arg(&dir).spawn();
     }
 
+    fn format_cli_output_path(raw: &str, default_name: &str, default_ext: Option<&str>) -> String {
+        let trimmed = raw.trim();
+        let mut resolved = if trimmed.is_empty() {
+            default_name.to_string()
+        } else if let Some(ext) = default_ext {
+            if trimmed.ends_with('/') || trimmed.ends_with('\\') {
+                format!("{}{}", trimmed, default_name)
+            } else if std::path::Path::new(trimmed).extension().is_none() {
+                format!("{}.{}", trimmed, ext)
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
+        if resolved.chars().any(|c| c.is_whitespace() || c == '"') {
+            resolved = format!("\"{}\"", resolved.replace('"', "\\\""));
+        }
+        resolved
+    }
+
+    pub fn open_copy_cli_modal(&mut self, use_render_tab: bool) {
+        self.copy_cli_use_render_tab = use_render_tab;
+        if !use_render_tab && self.cli_mode == CliCommandMode::Gui {
+            self.cli_mode = CliCommandMode::Mp4Video;
+        }
+        self.show_copy_cli_modal = true;
+    }
+
+    fn draw_cli_output_picker(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, target: CliOutputTarget) {
+        ui.horizontal(|ui| {
+            let (label, browse_kind) = match target {
+                CliOutputTarget::Mp4 => ("Output MP4:", Some(0u8)),
+                CliOutputTarget::Png => ("Output PNG:", Some(1u8)),
+                CliOutputTarget::Dir => ("Output Dir:", None),
+            };
+            ui.label(label);
+            let btn_w = if browse_kind.is_some() { 72.0 } else { 0.0 };
+            let txt_w = (ui.available_width() - btn_w - 6.0).max(90.0);
+            match target {
+                CliOutputTarget::Mp4 => {
+                    ui.add_sized(
+                        [txt_w, 22.0],
+                        egui::TextEdit::singleline(&mut self.cli_mp4_output)
+                            .hint_text("simulation.mp4"),
+                    );
+                }
+                CliOutputTarget::Png => {
+                    ui.add_sized(
+                        [txt_w, 22.0],
+                        egui::TextEdit::singleline(&mut self.png_output_path)
+                            .hint_text("snapshot.png"),
+                    );
+                }
+                CliOutputTarget::Dir => {
+                    ui.add_sized(
+                        [txt_w, 22.0],
+                        egui::TextEdit::singleline(&mut self.export_path).hint_text("exports"),
+                    );
+                }
+            }
+            if let Some(kind) = browse_kind {
+                if Self::icon_button(
+                    ui,
+                    UiIcon::Folder,
+                    "Browse",
+                    false,
+                    Some(egui::vec2(btn_w, 22.0)),
+                )
+                .on_hover_text("Choose output file path")
+                .clicked()
+                {
+                    self.spawn_render_file_dialog(ctx.clone(), kind);
+                }
+            }
+        });
+    }
+
     pub fn generate_render_tab_cli_command(&self) -> String {
         let mut clone_self_mode = self.cli_mode;
         let _ = &mut clone_self_mode;
@@ -1613,21 +1702,17 @@ impl LiquidApp {
 
         match self.render_kind {
             StudioRenderKind::Animation => {
-                let out = if self.cli_mp4_output.trim().is_empty() {
-                    "simulation.mp4"
-                } else {
-                    self.cli_mp4_output.trim()
-                };
+                let out = Self::format_cli_output_path(
+                    &self.cli_mp4_output,
+                    "simulation.mp4",
+                    Some("mp4"),
+                );
                 parts.push(format!("--export-mp4 {}", out));
                 parts.push(format!("--time {:.1}", self.cli_duration));
                 parts.push(format!("--fps {}", self.cli_fps));
             }
             StudioRenderKind::Interactive3D => {
-                let seq_out = if self.export_path.trim().is_empty() {
-                    "exports"
-                } else {
-                    self.export_path.trim()
-                };
+                let seq_out = Self::format_cli_output_path(&self.export_path, "exports", None);
                 if eff_mode == RenderMode::SurfaceMesh {
                     parts.push(format!("--export-obj {}", seq_out));
                 } else {
@@ -1637,11 +1722,11 @@ impl LiquidApp {
                 parts.push(format!("--fps {}", self.cli_fps));
             }
             StudioRenderKind::StillFrame => {
-                let out = if self.png_output_path.trim().is_empty() {
-                    "snapshot.png"
-                } else {
-                    self.png_output_path.trim()
-                };
+                let out = Self::format_cli_output_path(
+                    &self.png_output_path,
+                    "snapshot.png",
+                    Some("png"),
+                );
                 parts.push(format!("--export-png {}", out));
                 let t = if self.render_still_simulate {
                     self.render_still_time
@@ -1694,10 +1779,12 @@ impl LiquidApp {
             parts.push(format!("--camera-orbit {:.1}", self.camera_orbit_speed_deg));
         }
         if self.render_also_export_obj {
-            parts.push(format!("--export-obj {}", self.export_path.trim()));
+            let dir = Self::format_cli_output_path(&self.export_path, "exports", None);
+            parts.push(format!("--export-obj {}", dir));
         }
         if self.render_also_export_ply {
-            parts.push(format!("--export-ply {}", self.export_path.trim()));
+            let dir = Self::format_cli_output_path(&self.export_path, "exports", None);
+            parts.push(format!("--export-ply {}", dir));
         }
         if !self.use_gpu {
             parts.push("--cpu".to_string());
@@ -3291,11 +3378,11 @@ impl LiquidApp {
                 parts.push(format!("--fps {}", self.cli_fps));
             }
             CliCommandMode::Mp4Video => {
-                let out = if self.cli_mp4_output.is_empty() {
-                    "simulation.mp4"
-                } else {
-                    &self.cli_mp4_output
-                };
+                let out = Self::format_cli_output_path(
+                    &self.cli_mp4_output,
+                    "simulation.mp4",
+                    Some("mp4"),
+                );
                 parts.push(format!("--export-mp4 {}", out));
                 parts.push(format!("--time {:.1}", self.cli_duration));
                 parts.push(format!("--fps {}", self.cli_fps));
@@ -3311,11 +3398,11 @@ impl LiquidApp {
                 }
             }
             CliCommandMode::PngFrame => {
-                let out = if self.png_output_path.trim().is_empty() {
-                    "snapshot.png"
-                } else {
-                    self.png_output_path.trim()
-                };
+                let out = Self::format_cli_output_path(
+                    &self.png_output_path,
+                    "snapshot.png",
+                    Some("png"),
+                );
                 parts.push(format!("--export-png {}", out));
                 parts.push(format!("--time {:.1}", self.cli_duration));
                 parts.push(format!("--fps {}", self.cli_fps));
@@ -3332,11 +3419,8 @@ impl LiquidApp {
             }
             CliCommandMode::PlySequence => {
                 parts.push("--headless".to_string());
-                let dir = if self.export_path.is_empty() {
-                    "./ply_renders"
-                } else {
-                    &self.export_path
-                };
+                let dir =
+                    Self::format_cli_output_path(&self.export_path, "./ply_renders", None);
                 parts.push(format!("--export-ply {}", dir));
                 parts.push(format!("--time {:.1}", self.cli_duration));
                 parts.push(format!("--fps {}", self.cli_fps));
@@ -7046,6 +7130,12 @@ impl LiquidApp {
 
                     ui.separator();
                     ui.weak("Equivalent Terminal (CLI) Command:");
+                    let render_out_target = match self.render_kind {
+                        StudioRenderKind::Animation => CliOutputTarget::Mp4,
+                        StudioRenderKind::StillFrame => CliOutputTarget::Png,
+                        StudioRenderKind::Interactive3D => CliOutputTarget::Dir,
+                    };
+                    self.draw_cli_output_picker(ctx, ui, render_out_target);
                     let mut cli_cmd = self.generate_render_tab_cli_command();
                     ui.add(
                         egui::TextEdit::multiline(&mut cli_cmd)
@@ -7156,6 +7246,19 @@ impl LiquidApp {
                     }
                 }
             });
+
+            match self.cli_mode {
+                CliCommandMode::Mp4Video => {
+                    self.draw_cli_output_picker(ctx, ui, CliOutputTarget::Mp4);
+                }
+                CliCommandMode::PngFrame => {
+                    self.draw_cli_output_picker(ctx, ui, CliOutputTarget::Png);
+                }
+                CliCommandMode::PlySequence => {
+                    self.draw_cli_output_picker(ctx, ui, CliOutputTarget::Dir);
+                }
+                CliCommandMode::Gui | CliCommandMode::Headless => {}
+            }
 
             let mut cmd = self.generate_cli_command();
             ui.add(
@@ -7761,11 +7864,10 @@ impl eframe::App for LiquidApp {
                         }
 
                         if Self::icon_button(ui, UiIcon::Copy, "CLI", false, None)
-                            .on_hover_text("Copy runnable CLI command to clipboard")
+                            .on_hover_text("Set output filename & copy runnable CLI command")
                             .clicked()
                         {
-                            ctx.copy_text(self.generate_cli_command());
-                            self.status_message = "Copied CLI command to clipboard!".to_string();
+                            self.open_copy_cli_modal(self.active_tab == InspectorTab::Render);
                         }
 
                         if is_baked_3d_view && !self.is_playing {
@@ -9178,7 +9280,112 @@ impl eframe::App for LiquidApp {
             self.show_shortcuts_modal = open;
         }
 
-        // 7. GitHub Release Self-Updater Notification & Progress Modal
+        // 7. Copy CLI Command Dialog (with editable output filename & mode picker)
+        if self.show_copy_cli_modal {
+            let mut open = self.show_copy_cli_modal;
+            let mut close_now = false;
+            egui::Window::new("Copy CLI Command & Output Filename")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(470.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Preset Source:");
+                        if ui
+                            .selectable_label(!self.copy_cli_use_render_tab, "Export / Scene")
+                            .clicked()
+                        {
+                            self.copy_cli_use_render_tab = false;
+                        }
+                        if ui
+                            .selectable_label(self.copy_cli_use_render_tab, "Studio Render Tab")
+                            .clicked()
+                        {
+                            self.copy_cli_use_render_tab = true;
+                        }
+                    });
+
+                    if !self.copy_cli_use_render_tab {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Mode:");
+                            for &m in &[
+                                CliCommandMode::Mp4Video,
+                                CliCommandMode::PngFrame,
+                                CliCommandMode::PlySequence,
+                                CliCommandMode::Headless,
+                                CliCommandMode::Gui,
+                            ] {
+                                if ui.selectable_label(self.cli_mode == m, m.name()).clicked() {
+                                    self.cli_mode = m;
+                                }
+                            }
+                        });
+                    }
+
+                    let out_target = if self.copy_cli_use_render_tab {
+                        match self.render_kind {
+                            StudioRenderKind::Animation => Some(CliOutputTarget::Mp4),
+                            StudioRenderKind::StillFrame => Some(CliOutputTarget::Png),
+                            StudioRenderKind::Interactive3D => Some(CliOutputTarget::Dir),
+                        }
+                    } else {
+                        match self.cli_mode {
+                            CliCommandMode::Mp4Video => Some(CliOutputTarget::Mp4),
+                            CliCommandMode::PngFrame => Some(CliOutputTarget::Png),
+                            CliCommandMode::PlySequence => Some(CliOutputTarget::Dir),
+                            CliCommandMode::Gui | CliCommandMode::Headless => None,
+                        }
+                    };
+                    if let Some(target) = out_target {
+                        ui.add_space(4.0);
+                        self.draw_cli_output_picker(ctx, ui, target);
+                    }
+
+                    ui.add_space(6.0);
+                    ui.weak("Generated CLI Command:");
+                    let mut preview_cmd = if self.copy_cli_use_render_tab {
+                        self.generate_render_tab_cli_command()
+                    } else {
+                        self.generate_cli_command()
+                    };
+                    ui.add(
+                        egui::TextEdit::multiline(&mut preview_cmd)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_rows(4)
+                            .desired_width(f32::INFINITY),
+                    );
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if Self::icon_button(
+                            ui,
+                            UiIcon::Copy,
+                            "Copy Command",
+                            true,
+                            Some(egui::vec2(170.0, 28.0)),
+                        )
+                        .clicked()
+                        {
+                            ctx.copy_text(preview_cmd.clone());
+                            self.status_message = "Copied CLI command to clipboard!".to_string();
+                            close_now = true;
+                        }
+                        if ui.add_sized([84.0, 28.0], egui::Button::new("Close")).clicked()
+                            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            close_now = true;
+                        }
+                    });
+                });
+            if close_now {
+                open = false;
+            }
+            self.show_copy_cli_modal = open;
+        }
+
+        // 8. GitHub Release Self-Updater Notification & Progress Modal
         self.draw_updater_modal(ctx);
     }
 }
