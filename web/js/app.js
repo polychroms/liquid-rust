@@ -273,6 +273,82 @@ class LiquidApp {
             });
         }
 
+        // First-time Tutorial Video Modal (localStorage + ?tutorial=1 + Skip Tutorial)
+        const TUTORIAL_SEEN_KEY = 'liquidrust-tutorial-seen';
+        const tutModal = document.getElementById('tutorial-modal');
+        const tutVideo = document.getElementById('tutorial-video');
+        const btnTutOpen = document.getElementById('btn-tutorial');
+        const btnTutSkip = document.getElementById('btn-tutorial-skip');
+        const btnTutClose = document.getElementById('btn-tutorial-close');
+        let wasPlayingBeforeTutorial = false;
+
+        const syncPlayBtn = () => {
+            const pBtn = document.getElementById('btn-play');
+            if (pBtn) {
+                pBtn.innerHTML = this.isPlaying ? '<span>⏸</span> Pause' : '<span>▶</span> Play';
+            }
+        };
+
+        const openTutorial = (autoplay = false) => {
+            if (!tutModal || !tutVideo) return;
+            if (tutModal.hidden) {
+                wasPlayingBeforeTutorial = this.isPlaying;
+                if (this.isPlaying) {
+                    this.isPlaying = false;
+                    syncPlayBtn();
+                }
+            }
+            if (btnTutSkip) btnTutSkip.textContent = 'Skip Tutorial';
+            tutModal.hidden = false;
+            if (autoplay) {
+                tutVideo.play().catch(() => {});
+            }
+        };
+
+        const closeTutorial = () => {
+            if (!tutModal) return;
+            try {
+                localStorage.setItem(TUTORIAL_SEEN_KEY, '1');
+            } catch (_) {}
+            if (tutVideo) {
+                tutVideo.pause();
+                tutVideo.currentTime = 0;
+            }
+            tutModal.hidden = true;
+            if (wasPlayingBeforeTutorial) {
+                this.isPlaying = true;
+                syncPlayBtn();
+            }
+        };
+
+        if (btnTutOpen) btnTutOpen.addEventListener('click', () => openTutorial(true));
+        if (btnTutSkip) btnTutSkip.addEventListener('click', closeTutorial);
+        if (btnTutClose) btnTutClose.addEventListener('click', closeTutorial);
+        if (tutModal) {
+            tutModal.addEventListener('click', (e) => {
+                if (e.target === tutModal) closeTutorial();
+            });
+        }
+        if (tutVideo && btnTutSkip) {
+            tutVideo.addEventListener('ended', () => {
+                btnTutSkip.textContent = 'Start Simulating ▶';
+            });
+        }
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && tutModal && !tutModal.hidden) {
+                closeTutorial();
+            }
+        });
+
+        let tutorialSeen = false;
+        try {
+            tutorialSeen = localStorage.getItem(TUTORIAL_SEEN_KEY) === '1';
+        } catch (_) {}
+        const forceTutorial = new URLSearchParams(window.location.search).get('tutorial') === '1';
+        if (forceTutorial || !tutorialSeen) {
+            openTutorial(false);
+        }
+
         // Studio Inspector Tabs
         const tabs = document.querySelectorAll('.studio-tab');
         const panes = document.querySelectorAll('.tab-pane');

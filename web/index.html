@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="color-scheme" content="dark light">
     <title>LiquidRust Studio — Real-Time 2D/3D Fluid Simulator</title>
-    <link rel="stylesheet" href="css/style.css?v=20261120c">
+    <link rel="stylesheet" href="css/style.css?v=20261121b">
 </head>
 <body>
     <canvas id="glcanvas"></canvas>
@@ -58,6 +58,10 @@
         </div>
 
         <div class="header-stats">
+            <button id="btn-tutorial" class="btn-theme-toggle" type="button" title="Watch 64s Studio Tutorial" aria-label="Watch Tutorial Video">
+                <span>🎬</span>
+                <span>Tutorial</span>
+            </button>
             <button id="btn-theme" class="btn-theme-toggle" type="button" title="Switch to Light / Dark Studio Theme" aria-label="Toggle Light or Dark Theme">
                 <span id="theme-icon">☀️</span>
                 <span id="theme-label">Light</span>
@@ -405,6 +409,28 @@
         </div>
     </aside>
 
-    <script type="module" src="js/app.js?v=20261121a"></script>
+    <!-- First-Time Tutorial Video Modal -->
+    <div id="tutorial-modal" class="tutorial-modal" role="dialog" aria-modal="true" aria-labelledby="tutorial-title" hidden>
+        <div class="tutorial-dialog">
+            <div class="tutorial-header">
+                <div class="tutorial-heading">
+                    <span class="tutorial-badge">🎬 Studio Guide</span>
+                    <h2 id="tutorial-title">LiquidRust 64-Second Tutorial</h2>
+                </div>
+                <button id="btn-tutorial-close" class="tutorial-close" type="button" aria-label="Close tutorial">✕</button>
+            </div>
+            <div class="tutorial-video-wrap">
+                <video id="tutorial-video" controls playsinline preload="metadata">
+                    <source src="media/liquid-rust-training.mp4?v=20261121b" type="video/mp4">
+                </video>
+            </div>
+            <div class="tutorial-footer">
+                <span class="tutorial-hint">Covers Navigation, Scene, Physics, Materials, Render Tab &amp; CLI Export.</span>
+                <button id="btn-tutorial-skip" class="btn btn-primary" type="button">Skip Tutorial</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="js/app.js?v=20261121b"></script>
 </body>
 </html>

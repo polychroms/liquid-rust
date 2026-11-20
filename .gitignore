@@ -3,6 +3,7 @@ Cargo.lock
 exports/
 *.ply
 *.mp4
+!web/media/liquid-rust-training.mp4
 /dist/
 /*.tar.gz
 .DS_Store

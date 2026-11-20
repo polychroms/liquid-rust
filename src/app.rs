@@ -685,6 +685,7 @@ pub struct LiquidApp {
     pub status_message: String,
     pub show_extreme_modal: bool,
     pub show_shortcuts_modal: bool,
+    pub show_tutorial_modal: bool,
     pub show_copy_cli_modal: bool,
     pub copy_cli_use_render_tab: bool,
     pub obj_file_path: String,
@@ -763,6 +764,7 @@ impl LiquidApp {
         app.apply_guided_render_preset(GuidedRenderPreset::RecommendedHd);
         app.render_auto_save_png = true;
         app.theme_applied = true;
+        app.show_tutorial_modal = !Self::load_tutorial_seen();
         app.updater
             .spawn_check(Some(cc.egui_ctx.clone()), false);
         app
@@ -879,6 +881,7 @@ impl LiquidApp {
             status_message: "Ready".to_string(),
             show_extreme_modal: false,
             show_shortcuts_modal: false,
+            show_tutorial_modal: false,
             show_copy_cli_modal: false,
             copy_cli_use_render_tab: false,
             obj_file_path: "model.obj".to_string(),
@@ -927,7 +930,7 @@ impl LiquidApp {
         }
     }
 
-    fn theme_config_path() -> Option<std::path::PathBuf> {
+    fn config_file_path(filename: &str) -> Option<std::path::PathBuf> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
             .map(std::path::PathBuf::from)
@@ -941,11 +944,11 @@ impl LiquidApp {
                     .filter(|v| !v.is_empty())
                     .map(|h| std::path::PathBuf::from(h).join(".config"))
             })?;
-        Some(base.join("liquid-rust").join("theme.txt"))
+        Some(base.join("liquid-rust").join(filename))
     }
 
     fn load_saved_dark_mode() -> bool {
-        let Some(path) = Self::theme_config_path() else {
+        let Some(path) = Self::config_file_path("theme.txt") else {
             return true;
         };
         match std::fs::read_to_string(path) {
@@ -955,13 +958,40 @@ impl LiquidApp {
     }
 
     fn save_dark_mode(dark_mode: bool) {
-        let Some(path) = Self::theme_config_path() else {
+        let Some(path) = Self::config_file_path("theme.txt") else {
             return;
         };
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::write(path, if dark_mode { "dark\n" } else { "light\n" });
+    }
+
+    fn load_tutorial_seen_from_path(path: &std::path::Path) -> bool {
+        matches!(std::fs::read_to_string(path), Ok(txt) if txt.trim() == "1")
+    }
+
+    fn save_tutorial_seen_to_path(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, "1\n");
+    }
+
+    fn load_tutorial_seen() -> bool {
+        Self::config_file_path("tutorial_seen.txt")
+            .is_some_and(|p| Self::load_tutorial_seen_from_path(&p))
+    }
+
+    fn save_tutorial_seen() {
+        if let Some(path) = Self::config_file_path("tutorial_seen.txt") {
+            Self::save_tutorial_seen_to_path(&path);
+        }
+    }
+
+    fn dismiss_tutorial(&mut self) {
+        self.show_tutorial_modal = false;
+        Self::save_tutorial_seen();
     }
 
     #[inline]
@@ -8147,6 +8177,19 @@ impl eframe::App for LiquidApp {
                             self.show_shortcuts_modal = !self.show_shortcuts_modal;
                         }
 
+                        if Self::icon_button(
+                            ui,
+                            UiIcon::Film,
+                            "Tutorial",
+                            self.show_tutorial_modal,
+                            None,
+                        )
+                        .on_hover_text("Watch 64-second LiquidRust Studio tutorial video")
+                        .clicked()
+                        {
+                            self.show_tutorial_modal = !self.show_tutorial_modal;
+                        }
+
                         if Self::icon_button(ui, UiIcon::Image, "PNG", false, None)
                             .on_hover_text("Save Studio PNG screenshot to exports folder (P / F12)")
                             .clicked()
@@ -9710,6 +9753,59 @@ impl eframe::App for LiquidApp {
             self.show_shortcuts_modal = open;
         }
 
+        // 6B. First-Time Tutorial Video Prompt Modal (with Skip Tutorial button)
+        if self.show_tutorial_modal {
+            const TUTORIAL_WEB_URL: &str = "https://fluids.polychroms.dev/?tutorial=1";
+            let mut open = self.show_tutorial_modal;
+            let mut dismiss = false;
+            egui::Window::new("Welcome to LiquidRust — Studio Tutorial")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_min_width(410.0);
+                    ui.label(
+                        egui::RichText::new("64-Second Video Walkthrough")
+                            .strong()
+                            .size(15.0),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        "New to LiquidRust? Watch the quick guided tour of viewport navigation, \
+                         the Scene, Physics, Visuals, and Render tabs, and headless CLI MP4 export.",
+                    );
+                    ui.add_space(8.0);
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        for line in [
+                            "1. Viewport & Controls — Right-drag orbit, Left-drag attract",
+                            "2. Scene Tab — Presets, faucets, obstacles & .obj meshes",
+                            "3. Physics Tab — Viscosity presets (Honey, Mercury, Water)",
+                            "4. Visuals & Render Tabs — SSFR, 3D mesh & Studio MP4",
+                        ] {
+                            ui.small(line);
+                        }
+                    });
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if Self::icon_button(ui, UiIcon::Film, "Watch Tutorial Video", true, None)
+                            .on_hover_text("Open the 64s tutorial video in your browser")
+                            .clicked()
+                        {
+                            ctx.open_url(egui::OpenUrl::new_tab(TUTORIAL_WEB_URL));
+                            dismiss = true;
+                        }
+                        if ui.button("Skip Tutorial").clicked() {
+                            dismiss = true;
+                        }
+                    });
+                });
+            if dismiss || !open {
+                self.dismiss_tutorial();
+            }
+        }
+
         // 7. Copy CLI Command Dialog (with editable output filename & mode picker)
         if self.show_copy_cli_modal {
             let mut open = self.show_copy_cli_modal;
@@ -10239,5 +10335,23 @@ impl LiquidApp {
                     }
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LiquidApp;
+
+    #[test]
+    fn tutorial_seen_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("liquid_rust_tut_{}", std::process::id()));
+        let marker = dir.join("tutorial_seen.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!LiquidApp::load_tutorial_seen_from_path(&marker));
+        LiquidApp::save_tutorial_seen_to_path(&marker);
+        assert!(LiquidApp::load_tutorial_seen_from_path(&marker));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
