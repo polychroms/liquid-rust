@@ -9,9 +9,9 @@ import { GlRenderer } from './gl-renderer.js?v=20261120b';
 import { WebGpuSolver } from './webgpu-solver.js?v=20261113b';
 import { WebGpuRenderer } from './webgpu-renderer.js?v=20261120b';
 
-const RELEASE_LATEST = 'https://github.com/rappar222/liquid-rust/releases/latest';
+const RELEASE_LATEST = 'https://github.com/polychroms/liquid-rust/releases/latest';
 const RELEASE_DL = `${RELEASE_LATEST}/download`;
-const RELEASE_VER_DL = 'https://github.com/rappar222/liquid-rust/releases/download/v0.4.5';
+const RELEASE_VER_DL = 'https://github.com/polychroms/liquid-rust/releases/download/v0.4.5';
 const ANDROID_APK_URL = `${RELEASE_DL}/liquid-rust-android.apk`;
 const IOS_IPA_URL = `${RELEASE_DL}/liquid-rust-ios.ipa`;
 
