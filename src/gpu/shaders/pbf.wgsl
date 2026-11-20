@@ -100,7 +100,14 @@ fn closest_point_tri_gpu(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>)
     return a + ab * (vb * inv_sum) + ac * (vc * inv_sum);
 }
 
-fn query_mesh_gpu(m: u32, world_pos: vec3<f32>, search_world_r: f32, col_world_r: f32) -> MeshHit {
+fn query_mesh_gpu(
+    m: u32,
+    world_pos: vec3<f32>,
+    old_world_pos: vec3<f32>,
+    has_old: bool,
+    search_world_r: f32,
+    col_world_r: f32,
+) -> MeshHit {
     var res = MeshHit(0u, 0.0, 0.0, vec3<f32>(0.0));
     let base = m * 6u;
     let hdr0 = mesh_data[base + 0u];
@@ -129,6 +136,8 @@ fn query_mesh_gpu(m: u32, world_pos: vec3<f32>, search_world_r: f32, col_world_r
 
     let d_world = (world_pos - mesh_pos) * inv_s;
     let local_p = vec3<f32>(dot(r0, d_world), dot(r1, d_world), dot(r2, d_world));
+    let old_dw = (old_world_pos - mesh_pos) * inv_s;
+    let old_local = vec3<f32>(dot(r0, old_dw), dot(r1, old_dw), dot(r2, old_dw));
     let search_local_r = search_world_r * inv_s;
     let col_local_r = col_world_r * inv_s;
 
@@ -177,7 +186,8 @@ fn query_mesh_gpu(m: u32, world_pos: vec3<f32>, search_world_r: f32, col_world_r
                     var signed_d = 0.0;
                     if (dist > 1e-7) {
                         let nd = diff / dist;
-                        if (dot(nd, tn) < 0.0) {
+                        let moved_in = !has_old || (dot(old_local - cp, tn) > 0.0 && dot(local_p - old_local, tn) < 0.0 && dot(nd, tn) < -0.2);
+                        if (dot(nd, tn) < 0.0 && moved_in) {
                             n_loc = tn;
                             pen_loc = col_local_r + dist;
                             signed_d = -dist;
@@ -186,6 +196,10 @@ fn query_mesh_gpu(m: u32, world_pos: vec3<f32>, search_world_r: f32, col_world_r
                             pen_loc = col_local_r - dist;
                             signed_d = dist;
                         }
+                    } else if (has_old) {
+                        let od = old_local - cp;
+                        let od2 = dot(od, od);
+                        n_loc = select(tn, od * inverseSqrt(od2), od2 > 1e-12);
                     }
                     best_dist = signed_d;
                     best_n_local = n_loc;
@@ -529,17 +543,6 @@ fn boundary_contribution_gpu(pos: vec3<f32>) -> BoundaryContrib {
         }
     }
 
-    let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
-    for (var m = 0u; m < num_meshes; m++) {
-        let mh = query_mesh_gpu(m, pos, radius + h, radius);
-        if (mh.hit != 0u) {
-            let d_c = mh.dist - radius;
-            if (d_c < h) {
-                bc = fold_wall_gpu(bc, d_c, mh.normal, d_obs_offset, h, inv_h, gamma_w);
-            }
-        }
-    }
-
     if (is_2d) {
         bc.grad.z = 0.0;
     }
@@ -601,6 +604,13 @@ fn predict_positions(@builtin(global_invocation_id) id: vec3<u32>) {
     
     let radius = uniforms.bounds_max.w;
     pred = resolve_chamber_gpu(pred, radius);
+    let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
+    for (var m = 0u; m < num_meshes; m++) {
+        let mh = query_mesh_gpu(m, pred, p_pos, true, radius, radius);
+        if (mh.hit != 0u && mh.pen > 0.0) {
+            pred += mh.normal * mh.pen;
+        }
+    }
     
     let is_2d = (uniforms.counts.w & 0x80000000u) != 0u;
     if (is_2d) {
@@ -933,9 +943,10 @@ fn apply_delta_and_collide(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // Dynamic .obj Triangle Mesh BVH Projection
+    let old_p = old_positions[i].xyz;
     let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
     for (var m = 0u; m < num_meshes; m++) {
-        let mh = query_mesh_gpu(m, pos, radius, radius);
+        let mh = query_mesh_gpu(m, pos, old_p, true, radius, radius);
         if (mh.hit != 0u && mh.pen > 0.0) {
             pos += mh.normal * mh.pen;
         }
@@ -964,6 +975,7 @@ fn update_velocity_and_xsph(@builtin(global_invocation_id) id: vec3<u32>) {
     
     let new_pos = predicted_positions[i].xyz;
     let old_pos = old_positions[i].xyz;
+    let old_vel = particles[i].vel_dens.xyz;
     let dt = uniforms.gravity.w;
     var vel = (new_pos - old_pos) / dt;
     
@@ -1182,21 +1194,27 @@ fn update_velocity_and_xsph(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
-    // Triangle Mesh velocity response (inelastic settling by default)
+    // Triangle Mesh velocity response (inelastic settling, cancel PBF rebound when restitution == 0)
     let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
     for (var m = 0u; m < num_meshes; m++) {
         let search_r = radius + margin;
-        let mh = query_mesh_gpu(m, new_pos, search_r, search_r);
+        let mh = query_mesh_gpu(m, new_pos, old_pos, true, search_r, search_r);
         if (mh.hit != 0u) {
             let m_rest = mesh_data[m * 6u + 4u].w;
             let m_fric = mesh_data[m * 6u + 5u].w;
             let vn = dot(vel, mh.normal);
+            let old_vn = dot(old_vel, mh.normal);
             if (vn < 0.0) {
                 let eff_rest = select(0.0, m_rest, vn < -0.15);
                 vel -= (1.0 + eff_rest) * vn * mh.normal;
-                let vt = vel - mh.normal * dot(vel, mh.normal);
-                vel -= vt * clamp((1.0 - m_fric) * 0.1, 0.0, 0.5);
+            } else if (vn > 0.0 && old_vn <= 0.15) {
+                let max_out_vn = max(-old_vn * m_rest, 0.0);
+                if (vn > max_out_vn) {
+                    vel -= (vn - max_out_vn) * mh.normal;
+                }
             }
+            let vt = vel - mh.normal * dot(vel, mh.normal);
+            vel -= vt * clamp((1.0 - m_fric) * 0.1, 0.0, 0.5);
         }
     }
     // Fused XSPH Viscosity + Vorticity Curl

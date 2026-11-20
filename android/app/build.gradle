@@ -10,8 +10,8 @@ android {
         applicationId "com.liquidrust.mobile"
         minSdk 26
         targetSdk 34
-        versionCode 403
-        versionName "0.4.3"
+        versionCode 404
+        versionName "0.4.4"
     }
 
     buildTypes {

@@ -2613,6 +2613,147 @@ f 1 4 3
     }
 }
 
+#[test]
+fn test_obj_inward_winding_and_concave_inelastic() {
+    use liquid_rust::gpu::GpuSphSolver;
+    use liquid_rust::math::Aabb;
+    use liquid_rust::sph::{
+        Collider, SceneGenerator, SimulationQuality, SolverConfig, SphSolver, TriangleMesh,
+    };
+    use std::sync::Arc;
+
+    // 1. Intentionally inward-wound (clockwise) 3D OBJ box: closed mesh auto-flips to outward.
+    let inward_cube_obj = "\
+v -0.5 -0.5 -0.5
+v  0.5 -0.5 -0.5
+v  0.5  0.5 -0.5
+v -0.5  0.5 -0.5
+v -0.5 -0.5  0.5
+v  0.5 -0.5  0.5
+v  0.5  0.5  0.5
+v -0.5  0.5  0.5
+f 1 2 3
+f 1 3 4
+f 5 7 6
+f 5 8 7
+f 4 3 7
+f 4 7 8
+f 1 5 6
+f 1 6 2
+f 2 6 7
+f 2 7 3
+f 1 4 8
+f 1 8 5
+";
+    let mut mesh_inward = TriangleMesh::from_obj_str(inward_cube_obj, "InwardBox").unwrap();
+    mesh_inward.set_transform(Vec3::new(0.0, 0.22, 0.0), 0.38, Vec3::ZERO);
+    let col = Collider::mesh(Arc::new(mesh_inward));
+
+    let bounds = Aabb::new(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.2, 0.5));
+    let mut cfg = SolverConfig::default();
+    SimulationQuality::Medium.apply(&mut cfg, false);
+
+    let mut id = 0u32;
+    let init = SceneGenerator::spawn_block(
+        Vec3::new(-0.18, 0.45, -0.18),
+        Vec3::new(0.18, 0.72, 0.18),
+        cfg.spacing,
+        Vec3::ZERO,
+        &mut id,
+    );
+
+    let mut cpu = SphSolver::new(bounds, cfg.clone());
+    for p in &init {
+        cpu.add_particle(*p);
+    }
+    cpu.colliders.push(col.clone());
+    let dt = 1.0 / 60.0;
+    let mut cpu_peak_vy = 0.0f32;
+    for f in 0..60 {
+        cpu.step(dt);
+        if f >= 10 {
+            let max_vy = cpu.particles.iter().map(|p| p.velocity.y).fold(0.0f32, f32::max);
+            cpu_peak_vy = cpu_peak_vy.max(max_vy);
+        }
+    }
+    assert!(
+        cpu_peak_vy < 1.5,
+        "CPU inward-wound OBJ box should not explode/bounce, peak_vy={:.3}",
+        cpu_peak_vy
+    );
+
+    if let Ok(mut gpu) = GpuSphSolver::new(bounds, &cfg, &init) {
+        let cols = vec![col];
+        let mut gpu_parts = init.clone();
+        let mut gpu_peak_vy = 0.0f32;
+        for f in 0..60 {
+            gpu.step(bounds, &cpu.chamber, &cfg, &cols, None, 0.0, 0, dt, false);
+            if f >= 10 {
+                gpu.read_particles(&mut gpu_parts);
+                let max_vy = gpu_parts.iter().map(|p| p.velocity.y).fold(0.0f32, f32::max);
+                gpu_peak_vy = gpu_peak_vy.max(max_vy);
+            }
+        }
+        assert!(
+            gpu_peak_vy < 1.5,
+            "GPU inward-wound OBJ box should not explode/bounce, peak_vy={:.3}",
+            gpu_peak_vy
+        );
+
+        // 2. Open single-layered concave bowl hit from the back side
+        let mut bowl_obj = String::new();
+        let b_rings = 10usize;
+        let b_segs = 18usize;
+        for r in 0..=b_rings {
+            let phi = std::f32::consts::FRAC_PI_2 * (1.0 + r as f32 / b_rings as f32);
+            for s in 0..=b_segs {
+                let th = std::f32::consts::TAU * (s as f32 / b_segs as f32);
+                let x = 0.5 * phi.sin() * th.cos();
+                let y = 0.5 * phi.cos();
+                let z = 0.5 * phi.sin() * th.sin();
+                bowl_obj.push_str(&format!("v {:.5} {:.5} {:.5}\n", x, y, z));
+            }
+        }
+        let bst = b_segs + 1;
+        for r in 0..b_rings {
+            for s in 0..b_segs {
+                let i0 = r * bst + s + 1;
+                let i1 = i0 + 1;
+                let i2 = (r + 1) * bst + s + 1;
+                let i3 = i2 + 1;
+                bowl_obj.push_str(&format!("f {} {} {}\n", i0, i1, i2));
+                if r + 1 < b_rings {
+                    bowl_obj.push_str(&format!("f {} {} {}\n", i1, i3, i2));
+                }
+            }
+        }
+        let mut bowl_mesh = TriangleMesh::from_obj_str(&bowl_obj, "Bowl").unwrap();
+        bowl_mesh.set_transform(Vec3::new(0.0, 0.35, 0.0), 0.70, Vec3::ZERO);
+        let bowl_col = Collider::mesh(Arc::new(bowl_mesh));
+
+        gpu.init_buffers(bounds, &cfg, &init);
+        let bowl_cols = vec![bowl_col];
+        let mut bowl_parts = init.clone();
+        let mut peak_y_after_20 = 0.0f32;
+        for f in 0..60 {
+            gpu.step(bounds, &cpu.chamber, &cfg, &bowl_cols, None, 0.0, 0, dt, false);
+            if f >= 20 {
+                gpu.read_particles(&mut bowl_parts);
+                let max_y = bowl_parts
+                    .iter()
+                    .map(|p| p.position.y)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                peak_y_after_20 = peak_y_after_20.max(max_y);
+            }
+        }
+        assert!(
+            peak_y_after_20 < 0.58,
+            "Open concave OBJ bowl should contain/damp fluid cleanly, peak_y_after_20={:.3}",
+            peak_y_after_20
+        );
+    }
+}
+
 
 
 

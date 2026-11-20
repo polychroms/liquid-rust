@@ -92,8 +92,31 @@ impl Collider {
 
     /// Resolve collision with particle at `pos` with radius `r` and velocity `vel`.
     pub fn resolve(&self, pos: &mut Vec3, vel: &mut Vec3, particle_radius: f32) -> bool {
+        self.resolve_with_prev(pos, None, None, vel, particle_radius)
+    }
+
+    /// Resolve collision using optional previous position and pre-projection velocity.
+    pub fn resolve_with_prev(
+        &self,
+        pos: &mut Vec3,
+        prev_pos: Option<Vec3>,
+        pre_vel: Option<Vec3>,
+        vel: &mut Vec3,
+        particle_radius: f32,
+    ) -> bool {
         if !self.enabled {
             return false;
+        }
+        if let ColliderShape::Mesh(mesh) = &self.shape {
+            return mesh.resolve_collision_with_prev(
+                pos,
+                prev_pos,
+                pre_vel,
+                vel,
+                particle_radius,
+                self.restitution,
+                self.friction,
+            );
         }
 
         match &self.shape {
@@ -307,15 +330,7 @@ impl Collider {
                     }
                 }
             }
-            ColliderShape::Mesh(mesh) => {
-                if let Some((dist, n_outward)) = mesh.closest_surface_sample(pos, particle_radius + h)
-                {
-                    let d_c = dist - particle_radius;
-                    if d_c < h {
-                        apply(d_c, n_outward);
-                    }
-                }
-            }
+            ColliderShape::Mesh(_) => {}
         }
     }
 }

@@ -397,6 +397,7 @@ pub struct TriangleMesh {
 impl TriangleMesh {
     pub fn new(name: impl Into<String>, mut triangles: Vec<Triangle>) -> Self {
         let name = name.into();
+        Self::ensure_outward_winding_if_closed(&mut triangles);
         let bvh = MeshBvh::build(&mut triangles);
         let local_bounds = compute_triangles_bounds(&triangles);
         let wireframe = build_wireframe_segments(&triangles, local_bounds);
@@ -415,6 +416,44 @@ impl TriangleMesh {
         };
         mesh.update_transform();
         mesh
+    }
+
+    /// Flip triangle winding if a closed mesh was authored inside-out (negative signed volume).
+    fn ensure_outward_winding_if_closed(triangles: &mut [Triangle]) {
+        if triangles.len() < 4 {
+            return;
+        }
+        use std::collections::HashMap;
+        let quant = |v: Vec3| -> [i64; 3] {
+            [
+                (v.x * 1e5).round() as i64,
+                (v.y * 1e5).round() as i64,
+                (v.z * 1e5).round() as i64,
+            ]
+        };
+        let mut edge_counts: HashMap<([i64; 3], [i64; 3]), u32> =
+            HashMap::with_capacity(triangles.len() * 2);
+        let mut signed_vol6 = 0.0f64;
+        for tri in triangles.iter() {
+            let qa = quant(tri.a);
+            let qb = quant(tri.b);
+            let qc = quant(tri.c);
+            for (u, v) in [(qa, qb), (qb, qc), (qc, qa)] {
+                let key = if u <= v { (u, v) } else { (v, u) };
+                *edge_counts.entry(key).or_insert(0) += 1;
+            }
+            let a = tri.a.as_dvec3();
+            let b = tri.b.as_dvec3();
+            let c = tri.c.as_dvec3();
+            signed_vol6 += a.dot(b.cross(c));
+        }
+        let is_closed = edge_counts.values().all(|&c| c >= 2);
+        if is_closed && signed_vol6 < -1e-7 {
+            for tri in triangles.iter_mut() {
+                std::mem::swap(&mut tri.b, &mut tri.c);
+                tri.normal = -tri.normal;
+            }
+        }
     }
 
     fn parse_obj_reader<R: BufRead>(mut reader: R) -> Result<Vec<Triangle>, String> {
@@ -644,9 +683,11 @@ impl TriangleMesh {
     }
 
     /// Traverse local-space BVH within `search_r` and return `(signed_local_dist, local_normal, local_penetration)`.
+    /// When `old_local` is provided, triangles with inverted normals never pull particles across faces.
     fn query_local_closest(
         &self,
         local_p: Vec3,
+        old_local: Option<Vec3>,
         local_r: f32,
         search_r: f32,
     ) -> Option<(f32, Vec3, f32)> {
@@ -688,11 +729,27 @@ impl TriangleMesh {
                         let dist = dist_sq.sqrt();
                         let (normal, pen, signed_dist) = if dist > 1e-7 {
                             let n = diff / dist;
-                            if n.dot(tri.normal) < 0.0 {
+                            let moved_in = match old_local {
+                                Some(old_p) => {
+                                    (old_p - closest).dot(tri.normal) > 0.0
+                                        && (local_p - old_p).dot(tri.normal) < 0.0
+                                        && n.dot(tri.normal) < -0.2
+                                }
+                                None => true,
+                            };
+                            if n.dot(tri.normal) < 0.0 && moved_in {
                                 (tri.normal, local_r + dist, -dist)
                             } else {
                                 (n, local_r - dist, dist)
                             }
+                        } else if let Some(old_p) = old_local {
+                            let od = old_p - closest;
+                            let n = if od.length_squared() > 1e-12 {
+                                od.normalize()
+                            } else {
+                                tri.normal
+                            };
+                            (n, local_r, 0.0)
                         } else {
                             (tri.normal, local_r, 0.0)
                         };
@@ -741,7 +798,8 @@ impl TriangleMesh {
         let inv_s = 1.0 / self.scale.max(1e-4);
         let local_p = inv_rot * (pos - self.position) * inv_s;
 
-        let (local_dist, local_n, _) = self.query_local_closest(local_p, 0.0, max_dist * inv_s)?;
+        let (local_dist, local_n, _) =
+            self.query_local_closest(local_p, None, 0.0, max_dist * inv_s)?;
         let world_n = (rot_mat * local_n).normalize_or_zero();
         if world_n.length_squared() <= 0.5 || !world_n.is_finite() {
             return None;
@@ -753,6 +811,21 @@ impl TriangleMesh {
     pub fn resolve_collision(
         &self,
         pos: &mut Vec3,
+        vel: &mut Vec3,
+        particle_radius: f32,
+        restitution: f32,
+        friction: f32,
+    ) -> bool {
+        self.resolve_collision_with_prev(pos, None, None, vel, particle_radius, restitution, friction)
+    }
+
+    /// Side-consistent collision resolution using optional previous position and pre-projection velocity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_collision_with_prev(
+        &self,
+        pos: &mut Vec3,
+        prev_pos: Option<Vec3>,
+        pre_vel: Option<Vec3>,
         vel: &mut Vec3,
         particle_radius: f32,
         restitution: f32,
@@ -779,9 +852,11 @@ impl TriangleMesh {
         let inv_rot = rot_mat.transpose();
         let inv_s = 1.0 / self.scale.max(1e-4);
         let local_p = inv_rot * (*pos - self.position) * inv_s;
+        let old_local = prev_pos.map(|op| inv_rot * (op - self.position) * inv_s);
         let local_r = particle_radius * inv_s;
 
-        let Some((_, best_normal, best_pen)) = self.query_local_closest(local_p, local_r, local_r)
+        let Some((_, best_normal, best_pen)) =
+            self.query_local_closest(local_p, old_local, local_r, local_r)
         else {
             return false;
         };
@@ -789,18 +864,28 @@ impl TriangleMesh {
         let world_correction = (rot_mat * (best_normal * best_pen)) * self.scale;
         let world_normal = (rot_mat * best_normal).normalize_or_zero();
         if world_correction.is_finite() && world_normal.length_squared() > 0.5 {
-            *pos += world_correction;
+            if best_pen > 0.0 {
+                *pos += world_correction;
+            }
 
             let vn = vel.dot(world_normal);
+            let mut new_vel = *vel;
             if vn < 0.0 {
                 let eff_restitution = if vn < -0.15 { restitution } else { 0.0 };
-                let normal_impulse = -(1.0 + eff_restitution) * vn * world_normal;
-                let mut new_vel = *vel + normal_impulse;
-                let vt = new_vel - world_normal * new_vel.dot(world_normal);
-                new_vel -= vt * ((1.0 - friction) * 0.1).clamp(0.0, 0.5);
-                if new_vel.is_finite() {
-                    *vel = new_vel;
+                new_vel += -(1.0 + eff_restitution) * vn * world_normal;
+            } else if let Some(ov) = pre_vel {
+                let old_vn = ov.dot(world_normal);
+                if vn > 0.0 && old_vn <= 0.15 {
+                    let max_out_vn = (-old_vn * restitution).max(0.0);
+                    if vn > max_out_vn {
+                        new_vel -= (vn - max_out_vn) * world_normal;
+                    }
                 }
+            }
+            let vt = new_vel - world_normal * new_vel.dot(world_normal);
+            new_vel -= vt * ((1.0 - friction) * 0.1).clamp(0.0, 0.5);
+            if new_vel.is_finite() {
+                *vel = new_vel;
             }
             return true;
         }

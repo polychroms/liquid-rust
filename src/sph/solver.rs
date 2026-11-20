@@ -686,6 +686,7 @@ impl SphSolver {
         let mouse_strength = self.mouse_force_strength;
         let is_2d = self.is_2d;
         let chamber = &self.chamber;
+        let colliders_ref = &self.colliders;
         let wave_accel_x = if self.config.wave_amplitude > 1e-4 {
             let omega = std::f32::consts::TAU * self.config.wave_frequency.clamp(0.05, 8.0);
             self.config.wave_amplitude
@@ -756,6 +757,12 @@ impl SphSolver {
                 p.velocity.z = 0.0;
             }
             chamber.resolve_collision(&mut pred, radius, &bounds);
+            let mut pred_dummy_v = Vec3::ZERO;
+            for col in colliders_ref {
+                if matches!(col.shape, crate::sph::collider::ColliderShape::Mesh(_)) {
+                    col.resolve_with_prev(&mut pred, Some(p.position), None, &mut pred_dummy_v, radius);
+                }
+            }
             if is_2d {
                 pred.z = 0.0;
             }
@@ -989,6 +996,7 @@ impl SphSolver {
 
             // 4c. Apply displacements and project collisions onto predicted positions
             let deltas = &self.delta_positions;
+            let old_pos_slice = &self.old_positions;
             let relaxation_omega = 0.65;
             let apply_collide = |(i, p_pos): (usize, &mut Vec3)| {
                 *p_pos += deltas[i] * relaxation_omega;
@@ -1000,7 +1008,7 @@ impl SphSolver {
 
                 let mut dummy_vel = Vec3::ZERO;
                 for collider in colliders {
-                    collider.resolve(p_pos, &mut dummy_vel, radius);
+                    collider.resolve_with_prev(p_pos, Some(old_pos_slice[i]), None, &mut dummy_vel, radius);
                 }
 
                 if is_2d {
@@ -1038,6 +1046,7 @@ impl SphSolver {
                 return;
             }
 
+            let pre_vel = p.velocity;
             let mut new_pos = pred_pos[i];
             let old_pos = old_pos_slice[i];
             if !new_pos.is_finite() {
@@ -1060,7 +1069,7 @@ impl SphSolver {
             );
 
             for collider in colliders {
-                collider.resolve(&mut new_pos, &mut vel, radius);
+                collider.resolve_with_prev(&mut new_pos, Some(old_pos), Some(pre_vel), &mut vel, radius);
             }
 
             if is_2d {
