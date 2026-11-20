@@ -1127,7 +1127,8 @@ input[type="range"]::-moz-range-thumb:hover {
 }
 
 .tutorial-dialog {
-    width: min(920px, 100%);
+    width: min(84vw, calc((80dvh - 108px) * 16 / 9), calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
     background: var(--panel-bg);
     border: 1px solid var(--panel-border-strong);
     border-radius: 14px;
@@ -1200,9 +1201,10 @@ input[type="range"]::-moz-range-thumb:hover {
 
 .tutorial-footer {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 10px 12px;
     padding: 12px 16px;
     border-top: 1px solid var(--panel-border);
 }

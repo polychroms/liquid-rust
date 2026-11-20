@@ -1004,6 +1004,20 @@ impl LiquidApp {
         }
     }
 
+    fn tutorial_video_size_for_viewport(screen: egui::Vec2) -> egui::Vec2 {
+        let aspect = TUTORIAL_HEIGHT as f32 / TUTORIAL_WIDTH as f32;
+        let max_w = (screen.x * 0.78)
+            .min((screen.x - 36.0).max(220.0))
+            .max(220.0);
+        let max_modal_h = (screen.y * 0.78)
+            .min((screen.y - 36.0).max(180.0))
+            .max(180.0);
+        let chrome_h = if max_w < 470.0 { 114.0 } else { 86.0 };
+        let max_vid_h = (max_modal_h - chrome_h).max(110.0);
+        let w = max_w.min(max_vid_h / aspect).max(200.0);
+        egui::vec2(w, w * aspect)
+    }
+
     fn open_tutorial(&mut self, ctx: &egui::Context) {
         if !self.show_tutorial_modal {
             self.tutorial_prev_playing = Some(self.is_playing);
@@ -9801,9 +9815,7 @@ impl eframe::App for LiquidApp {
         if self.show_tutorial_modal {
             let mut open = self.show_tutorial_modal;
             let mut dismiss = false;
-            let max_w = (ctx.screen_rect().width() - 56.0).clamp(360.0, 780.0);
-            let aspect = TUTORIAL_HEIGHT as f32 / TUTORIAL_WIDTH as f32;
-            let video_size = egui::vec2(max_w, max_w * aspect);
+            let video_size = Self::tutorial_video_size_for_viewport(ctx.screen_rect().size());
 
             egui::Window::new("Welcome to LiquidRust — 64s Studio Tutorial")
                 .open(&mut open)
@@ -9877,55 +9889,80 @@ impl eframe::App for LiquidApp {
                     }
 
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        let (play_icon, play_lbl) = match status {
-                            TutorialStatus::Playing | TutorialStatus::Loading(_) => {
-                                (UiIcon::Pause, "Pause")
-                            }
-                            TutorialStatus::Ended => (UiIcon::Reset, "Replay"),
-                            _ => (UiIcon::Play, "Play"),
-                        };
-                        if Self::icon_button(ui, play_icon, play_lbl, false, None).clicked() {
-                            self.tutorial_player.toggle_play(ctx.clone());
+                    let compact = video_size.x < 470.0;
+                    let (play_icon, play_lbl) = match status {
+                        TutorialStatus::Playing | TutorialStatus::Loading(_) => {
+                            (UiIcon::Pause, "Pause")
                         }
+                        TutorialStatus::Ended => (UiIcon::Reset, "Replay"),
+                        _ => (UiIcon::Play, "Play"),
+                    };
+                    let mute_lbl = if self.tutorial_player.muted {
+                        "Muted"
+                    } else {
+                        "Sound"
+                    };
+                    let skip_lbl = if status == TutorialStatus::Ended {
+                        "Start Simulating"
+                    } else {
+                        "Skip Tutorial"
+                    };
+                    let mins = (cur_pos as u32) / 60;
+                    let secs = (cur_pos as u32) % 60;
+                    let tot_m = (TUTORIAL_DURATION_SECS as u32) / 60;
+                    let tot_s = (TUTORIAL_DURATION_SECS as u32) % 60;
+                    let time_lbl = format!("{:02}:{:02} / {:02}:{:02}", mins, secs, tot_m, tot_s);
 
+                    let draw_scrub = |ui: &mut egui::Ui, width: f32| -> Option<f64> {
                         let mut scrub = cur_pos;
-                        let slider_w = (video_size.x - 335.0).max(110.0);
-                        ui.spacing_mut().slider_width = slider_w;
+                        ui.spacing_mut().slider_width = width;
                         let s_resp = ui.add(
                             egui::Slider::new(&mut scrub, 0.0..=TUTORIAL_DURATION_SECS)
                                 .show_value(false),
                         );
-                        if s_resp.drag_stopped() || (s_resp.clicked() && !s_resp.dragged()) {
-                            self.tutorial_player.seek(ctx.clone(), scrub);
-                        }
+                        (s_resp.drag_stopped() || (s_resp.clicked() && !s_resp.dragged()))
+                            .then_some(scrub)
+                    };
 
-                        let mins = (cur_pos as u32) / 60;
-                        let secs = (cur_pos as u32) % 60;
-                        let tot_m = (TUTORIAL_DURATION_SECS as u32) / 60;
-                        let tot_s = (TUTORIAL_DURATION_SECS as u32) % 60;
-                        ui.monospace(format!("{:02}:{:02} / {:02}:{:02}", mins, secs, tot_m, tot_s));
-
-                        let mute_lbl = if self.tutorial_player.muted {
-                            "Muted"
-                        } else {
-                            "Sound"
-                        };
-                        if ui.button(mute_lbl).clicked() {
-                            self.tutorial_player.toggle_mute(ctx.clone());
-                        }
-
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let skip_lbl = if status == TutorialStatus::Ended {
-                                "Start Simulating"
-                            } else {
-                                "Skip Tutorial"
-                            };
-                            if ui.button(skip_lbl).clicked() {
-                                dismiss = true;
+                    if compact {
+                        ui.horizontal(|ui| {
+                            if Self::icon_button(ui, play_icon, play_lbl, false, None).clicked() {
+                                self.tutorial_player.toggle_play(ctx.clone());
                             }
+                            if let Some(t) = draw_scrub(ui, (video_size.x - 185.0).max(56.0)) {
+                                self.tutorial_player.seek(ctx.clone(), t);
+                            }
+                            ui.monospace(&time_lbl);
                         });
-                    });
+                        ui.horizontal(|ui| {
+                            if ui.button(mute_lbl).clicked() {
+                                self.tutorial_player.toggle_mute(ctx.clone());
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(skip_lbl).clicked() {
+                                    dismiss = true;
+                                }
+                            });
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            if Self::icon_button(ui, play_icon, play_lbl, false, None).clicked() {
+                                self.tutorial_player.toggle_play(ctx.clone());
+                            }
+                            if let Some(t) = draw_scrub(ui, (video_size.x - 335.0).max(90.0)) {
+                                self.tutorial_player.seek(ctx.clone(), t);
+                            }
+                            ui.monospace(&time_lbl);
+                            if ui.button(mute_lbl).clicked() {
+                                self.tutorial_player.toggle_mute(ctx.clone());
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(skip_lbl).clicked() {
+                                    dismiss = true;
+                                }
+                            });
+                        });
+                    }
                 });
 
             if dismiss || !open {
@@ -10480,5 +10517,17 @@ mod tests {
         assert!(LiquidApp::load_tutorial_seen_from_path(&marker));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tutorial_video_scales_proportionally_with_window() {
+        let small = LiquidApp::tutorial_video_size_for_viewport(eframe::egui::vec2(520.0, 420.0));
+        let medium = LiquidApp::tutorial_video_size_for_viewport(eframe::egui::vec2(1280.0, 720.0));
+        let large = LiquidApp::tutorial_video_size_for_viewport(eframe::egui::vec2(2560.0, 1440.0));
+
+        assert!(small.x < medium.x && medium.x < large.x);
+        assert!(small.y < medium.y && medium.y < large.y);
+        assert!(large.x > 1200.0);
+        assert!(small.y + 114.0 <= 420.0);
     }
 }
