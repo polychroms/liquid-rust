@@ -584,6 +584,18 @@ fn extract_and_install_binary(asset_name: &str, raw_bytes: &[u8]) -> Result<Path
     install_binary_bytes(&bin, &target_exe)
 }
 
+#[cfg(target_os = "macos")]
+fn prepare_macos_binary(path: &Path) {
+    let _ = Command::new("/usr/bin/xattr")
+        .args(["-d", "com.apple.quarantine"])
+        .arg(path)
+        .status();
+    let _ = Command::new("/usr/bin/codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(path)
+        .status();
+}
+
 fn install_binary_bytes(bin: &[u8], target_exe: &Path) -> Result<PathBuf, String> {
     let parent = target_exe
         .parent()
@@ -604,6 +616,9 @@ fn install_binary_bytes(bin: &[u8], target_exe: &Path) -> Result<PathBuf, String
                 fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o755))
                     .map_err(|e| format!("Failed setting executable permissions: {}", e))?;
             }
+
+            #[cfg(target_os = "macos")]
+            prepare_macos_binary(&tmp_path);
 
             #[cfg(windows)]
             {
@@ -657,6 +672,8 @@ fn install_elevated_or_user_fallback(bin: &[u8], target_exe: &Path) -> Result<Pa
             .map_err(|e| format!("Failed syncing staged update: {}", e))?;
     }
     let _ = fs::set_permissions(&stage_path, fs::Permissions::from_mode(0o755));
+    #[cfg(target_os = "macos")]
+    prepare_macos_binary(&stage_path);
 
     // Atomic stage + mv avoids ETXTBSY ("Text file busy") when replacing a running /bin/liquid-rust binary
     let atomic_script = r#"install -m 0755 "$1" "$2.new" && mv -f "$2.new" "$2""#;
@@ -703,8 +720,8 @@ fn install_elevated_or_user_fallback(bin: &[u8], target_exe: &Path) -> Result<Pa
         let stage_s = esc(&stage_path.to_string_lossy());
         let target_s = esc(&target_exe.to_string_lossy());
         let shell_cmd = format!(
-            "install -m 0755 '{}' '{}.new' && mv -f '{}.new' '{}'",
-            stage_s, target_s, target_s, target_s
+            "install -m 0755 '{}' '{}.new' && (/usr/bin/xattr -d com.apple.quarantine '{}.new' 2>/dev/null || true) && (/usr/bin/codesign --force --sign - '{}.new' 2>/dev/null || true) && mv -f '{}.new' '{}'",
+            stage_s, target_s, target_s, target_s, target_s, target_s
         );
         let osa_expr = format!(
             "do shell script \"{}\" with administrator privileges",

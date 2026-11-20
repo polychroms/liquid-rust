@@ -103,12 +103,15 @@ tar -xzf liquid-rust-linux-x86_64.tar.gz
 ### 🍎 macOS (Apple Silicon `arm64` & Intel `x86_64`)
 
 ```bash
-# Automatic install via liquid-rust-install.sh:
+# Automatic install via liquid-rust-install.sh (recommended — avoids browser quarantine):
 curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
 
-# Or download the release archive manually:
+# Or download & extract manually:
 # Apple Silicon (M1–M4): liquid-rust-macos-arm64.tar.gz
 # Intel x86_64:          liquid-rust-macos-x86_64.tar.gz
+# If macOS Gatekeeper warns "Apple could not verify ... is free of malware":
+xattr -dr com.apple.quarantine ./liquid-rust* && ./liquid-rust
+# (Or run `./liquid-rust-install.sh` inside the extracted folder, or allow it in System Settings → Privacy & Security → Open Anyway.)
 ```
 
 ---

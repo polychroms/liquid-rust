@@ -144,6 +144,11 @@ fi
 
 $SUDO mkdir -p "$TARGET_DIR"
 $SUDO install -m 0755 "$SOURCE_BIN" "${TARGET_BIN}.new"
+if [ "$OS_NAME" = "Darwin" ]; then
+    # Strip browser quarantine attribute and ensure valid ad-hoc Mach-O signature for Apple Silicon / Gatekeeper
+    $SUDO xattr -d com.apple.quarantine "${TARGET_BIN}.new" 2>/dev/null || true
+    $SUDO codesign --force --sign - "${TARGET_BIN}.new" 2>/dev/null || true
+fi
 $SUDO mv -f "${TARGET_BIN}.new" "$TARGET_BIN"
 
 # 5. Install desktop application entry on Linux

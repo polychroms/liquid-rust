@@ -99,11 +99,39 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Package macOS tarball
+      - name: Sign (optional Developer ID / ad-hoc) & package macOS tarball
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/liquid-rust dist/
-          cd dist && tar -czvf ${{ matrix.artifact }} liquid-rust
+          cp target/${{ matrix.target }}/release/liquid-rust dist/liquid-rust
+          cp liquid-rust-install.sh dist/liquid-rust-install.sh
+          chmod 0755 dist/liquid-rust dist/liquid-rust-install.sh
+
+          if [[ -n "$APPLE_CERTIFICATE_P12" && -n "$APPLE_CERTIFICATE_PASSWORD" ]]; then
+            echo "$APPLE_CERTIFICATE_P12" | base64 --decode > cert.p12
+            security create-keychain -p ci-temp build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p ci-temp build.keychain
+            security import cert.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci-temp build.keychain
+            SIGN_ID="$(security find-identity -v -p codesigning build.keychain | head -n 1 | sed -n 's/.*"\(.*\)"/\1/p')"
+            codesign --force --options runtime --timestamp --sign "$SIGN_ID" dist/liquid-rust
+            if [[ -n "$APPLE_ID" && -n "$APPLE_APP_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
+              ditto -c -k --keepParent dist/liquid-rust dist/liquid-rust-notarize.zip
+              xcrun notarytool submit dist/liquid-rust-notarize.zip --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+              rm -f dist/liquid-rust-notarize.zip
+            fi
+            rm -f cert.p12
+          else
+            codesign --force --sign - dist/liquid-rust
+          fi
+
+          COPYFILE_DISABLE=1 tar -C dist -czvf dist/${{ matrix.artifact }} liquid-rust liquid-rust-install.sh
       - name: Upload macOS Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
