@@ -2459,6 +2459,161 @@ fn test_ssfr_render_mode_slugs_and_fusion_defaults() {
     assert!(cfg.opacity < 0.98);
 }
 
+#[test]
+fn test_obj_mesh_preserved_across_quality_and_2d_changes() {
+    use liquid_rust::app::LiquidApp;
+    use liquid_rust::sph::{Collider, ColliderShape, SimulationQuality, TriangleMesh};
+    use std::sync::Arc;
+
+    let mut app = LiquidApp::new_headless();
+    let obj_data = "\
+v -0.5 -0.1 -0.5
+v  0.5 -0.1 -0.5
+v  0.5  0.1  0.5
+v -0.5  0.1  0.5
+f 1 3 2
+f 1 4 3
+";
+    let mut mesh = TriangleMesh::from_obj_str(obj_data, "Platform").unwrap();
+    mesh.set_transform(Vec3::new(0.1, 0.4, 0.2), 0.5, Vec3::ZERO);
+    let mut col = Collider::mesh(Arc::new(mesh));
+    col.id = 42;
+    assert_eq!(col.restitution, 0.0);
+    app.solver.colliders.push(col);
+
+    app.set_quality(SimulationQuality::High);
+    assert!(
+        app.solver
+            .colliders
+            .iter()
+            .any(|c| c.id == 42 && matches!(c.shape, ColliderShape::Mesh(_))),
+        "Loaded OBJ mesh collider must not disappear when scene quality changes"
+    );
+
+    app.set_2d(true);
+    let mesh_col = app
+        .solver
+        .colliders
+        .iter()
+        .find(|c| c.id == 42)
+        .expect("OBJ mesh collider should persist when switching to 2D");
+    if let ColliderShape::Mesh(ref m) = mesh_col.shape {
+        assert!((m.position.z).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn test_obj_mesh_collision_inelastic_on_cpu_and_gpu() {
+    use liquid_rust::gpu::GpuSphSolver;
+    use liquid_rust::math::Aabb;
+    use liquid_rust::sph::{
+        Collider, SceneGenerator, SimulationQuality, SolverConfig, SphSolver, TriangleMesh,
+    };
+    use std::sync::Arc;
+
+    let slab_obj = "\
+v -0.5 0.0 -0.5
+v  0.5 0.0 -0.5
+v  0.5 0.0  0.5
+v -0.5 0.0  0.5
+f 1 3 2
+f 1 4 3
+";
+    let mut mesh = TriangleMesh::from_obj_str(slab_obj, "FloorSlab").unwrap();
+    mesh.set_transform(Vec3::new(0.0, 0.30, 0.0), 1.4, Vec3::ZERO);
+    let col = Collider::mesh(Arc::new(mesh));
+    assert_eq!(col.restitution, 0.0);
+
+    let bounds = Aabb::new(Vec3::new(-0.6, 0.0, -0.6), Vec3::new(0.6, 1.2, 0.6));
+    let mut cpu = SphSolver::new(bounds, SolverConfig::default());
+    cpu.apply_quality(SimulationQuality::Draft);
+    let mut id = 0u32;
+    let block = SceneGenerator::spawn_block(
+        Vec3::new(-0.20, 0.36, -0.20),
+        Vec3::new(0.20, 0.56, 0.20),
+        cpu.config.spacing,
+        Vec3::new(0.0, -1.0, 0.0),
+        &mut id,
+    );
+    for p in block {
+        cpu.add_particle(p);
+    }
+    cpu.colliders.push(col.clone());
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..45 {
+        cpu.step(dt);
+    }
+    let cpu_max_y = cpu
+        .particles
+        .iter()
+        .map(|p| p.position.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let cpu_min_y = cpu
+        .particles
+        .iter()
+        .map(|p| p.position.y)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        cpu_max_y < 0.62,
+        "CPU fluid on OBJ mesh should settle without bouncing upward, max_y={:.3}",
+        cpu_max_y
+    );
+    assert!(
+        cpu_min_y > 0.28,
+        "CPU fluid should stay supported above OBJ slab at y=0.30, min_y={:.3}",
+        cpu_min_y
+    );
+
+    if let Ok(mut gpu) = GpuSphSolver::new(cpu.bounds, &cpu.config, &cpu.particles) {
+        // Re-seed clean falling block on GPU
+        let mut gpu_particles = Vec::new();
+        let mut gid = 0u32;
+        gpu_particles.extend(SceneGenerator::spawn_block(
+            Vec3::new(-0.20, 0.36, -0.20),
+            Vec3::new(0.20, 0.56, 0.20),
+            cpu.config.spacing,
+            Vec3::new(0.0, -1.0, 0.0),
+            &mut gid,
+        ));
+        gpu.init_buffers(cpu.bounds, &cpu.config, &gpu_particles);
+        let cols = vec![col];
+        for _ in 0..45 {
+            gpu.step(
+                cpu.bounds,
+                &cpu.chamber,
+                &cpu.config,
+                &cols,
+                None,
+                0.0,
+                0,
+                dt,
+                false,
+            );
+        }
+        gpu.read_particles(&mut gpu_particles);
+        let gpu_max_y = gpu_particles
+            .iter()
+            .map(|p| p.position.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let gpu_min_y = gpu_particles
+            .iter()
+            .map(|p| p.position.y)
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            gpu_max_y < 0.62,
+            "GPU fluid on OBJ mesh should settle without bouncing upward, max_y={:.3}",
+            gpu_max_y
+        );
+        assert!(
+            gpu_min_y > 0.28,
+            "GPU fluid should stay supported above OBJ slab at y=0.30, min_y={:.3}",
+            gpu_min_y
+        );
+    }
+}
+
+
 
 
 

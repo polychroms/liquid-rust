@@ -1160,6 +1160,28 @@ impl LiquidApp {
         self.status_message = format!("Matched optical material: {}", mat.name());
     }
 
+    fn load_preset_preserving_meshes(&mut self, preset: ScenePreset, flatten_z: bool) {
+        let mut preserved_meshes: Vec<Collider> = self
+            .solver
+            .colliders
+            .iter()
+            .filter(|c| matches!(c.shape, ColliderShape::Mesh(_)))
+            .cloned()
+            .collect();
+        self.load_preset(preset);
+        for mut col in preserved_meshes.drain(..) {
+            if flatten_z {
+                if let ColliderShape::Mesh(ref mut mesh_arc) = col.shape {
+                    let mesh = Arc::make_mut(mesh_arc);
+                    mesh.position.z = 0.0;
+                    mesh.update_transform();
+                }
+            }
+            self.next_collider_id = self.next_collider_id.max(col.id + 1);
+            self.solver.colliders.push(col);
+        }
+    }
+
     pub fn set_2d(&mut self, is_2d: bool) {
         self.is_2d = is_2d;
         self.solver.set_2d(is_2d);
@@ -1171,7 +1193,7 @@ impl LiquidApp {
             self.camera_orbit_speed_deg = 0.0;
         }
         self.solver.apply_quality(self.current_quality);
-        self.load_preset(self.current_preset);
+        self.load_preset_preserving_meshes(self.current_preset, is_2d);
         self.status_message = if is_2d {
             "Switched to 2D Planar Mode".to_string()
         } else {
@@ -1224,7 +1246,7 @@ impl LiquidApp {
     pub fn set_quality(&mut self, quality: SimulationQuality) {
         self.current_quality = quality;
         self.solver.apply_quality(quality);
-        self.load_preset(self.current_preset);
+        self.load_preset_preserving_meshes(self.current_preset, false);
         self.status_message = format!("Set quality: {}", quality.name_for(self.is_2d));
     }
 
@@ -1431,51 +1453,6 @@ impl LiquidApp {
                     self.is_2d,
                 );
                 gpu.read_particles(&mut self.solver.particles);
-            }
-
-            // Resolve any custom .obj Mesh colliders on readback
-            let has_mesh_collider = self
-                .solver
-                .colliders
-                .iter()
-                .any(|c| c.enabled && matches!(c.shape, ColliderShape::Mesh(_)));
-            if has_mesh_collider {
-                let radius = self.solver.config.particle_radius;
-                let colliders = &self.solver.colliders;
-                let is_2d = self.is_2d;
-                let b_min = self.solver.bounds.min + Vec3::splat(radius);
-                let b_max = self.solver.bounds.max - Vec3::splat(radius);
-                let any_mesh_hit = self
-                    .solver
-                    .particles
-                    .par_iter_mut()
-                    .map(|p| {
-                        let mut p_hit = false;
-                        for col in colliders {
-                            if let ColliderShape::Mesh(_) = &col.shape {
-                                p_hit |= col.resolve(&mut p.position, &mut p.velocity, radius);
-                            }
-                        }
-                        if p_hit {
-                            p.position = p.position.clamp(b_min.min(b_max), b_max.max(b_min));
-                            if is_2d {
-                                p.position.z = 0.0;
-                                p.velocity.z = 0.0;
-                            }
-                        }
-                        p_hit
-                    })
-                    .reduce(|| false, |a, b| a || b);
-                if any_mesh_hit {
-                    if let Some(ref mut gpu) = self.gpu_solver {
-                        gpu.sync_particles(
-                            self.solver.bounds,
-                            &self.solver.config,
-                            &self.solver.particles,
-                            false,
-                        );
-                    }
-                }
             }
 
             let drained = self.solver.drain_particles();

@@ -69,8 +69,8 @@ impl Collider {
             name,
             shape: ColliderShape::Mesh(mesh),
             velocity: Vec3::ZERO,
-            restitution: 0.02,
-            friction: 0.95,
+            restitution: 0.0,
+            friction: 0.92,
             enabled: true,
         }
     }
@@ -307,7 +307,15 @@ impl Collider {
                     }
                 }
             }
-            ColliderShape::Mesh(_) => {}
+            ColliderShape::Mesh(mesh) => {
+                if let Some((dist, n_outward)) = mesh.closest_surface_sample(pos, particle_radius + h)
+                {
+                    let d_c = dist - particle_radius;
+                    if d_c < h {
+                        apply(d_c, n_outward);
+                    }
+                }
+            }
         }
     }
 }

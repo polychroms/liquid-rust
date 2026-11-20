@@ -130,13 +130,13 @@ impl Triangle {
 
 /// 32-byte cache-aligned flat BVH node in local mesh coordinates.
 #[derive(Clone, Copy, Debug)]
-struct BvhNode {
-    min: Vec3,
-    left_or_first: u32,
-    max: Vec3,
+pub struct BvhNode {
+    pub min: Vec3,
+    pub left_or_first: u32,
+    pub max: Vec3,
     /// High bit (`0x8000_0000`) marks a leaf with `(count_or_right & 0x7FFF_FFFF)` triangles;
     /// otherwise stores the right child node index.
-    count_or_right: u32,
+    pub count_or_right: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -599,6 +599,21 @@ impl TriangleMesh {
         }
     }
 
+    /// Return flat BVH nodes in local mesh coordinates for GPU upload.
+    pub fn bvh_nodes(&self) -> &[BvhNode] {
+        &self.bvh.nodes
+    }
+
+    /// World-space rotation matrix matching `(rotation.y, rotation.x, rotation.z)` YXZ Euler order.
+    pub fn rotation_matrix(&self) -> glam::Mat3 {
+        glam::Mat3::from_euler(
+            glam::EulerRot::YXZ,
+            self.rotation.y,
+            self.rotation.x,
+            self.rotation.z,
+        )
+    }
+
     pub fn set_transform(&mut self, position: Vec3, scale: f32, rotation: Vec3) {
         self.position = position;
         self.scale = scale.max(1e-4);
@@ -609,12 +624,7 @@ impl TriangleMesh {
     /// $O(1)$ world AABB update from the 8 corners of `local_bounds`.
     pub fn update_transform(&mut self) {
         self.scale = self.scale.max(1e-4);
-        let rot_mat = glam::Mat3::from_euler(
-            glam::EulerRot::YXZ,
-            self.rotation.y,
-            self.rotation.x,
-            self.rotation.z,
-        );
+        let rot_mat = self.rotation_matrix();
         let s = self.scale;
 
         let mut min = Vec3::splat(f32::INFINITY);
@@ -631,6 +641,112 @@ impl TriangleMesh {
             max = self.position;
         }
         self.world_bounds = Aabb::new(min, max);
+    }
+
+    /// Traverse local-space BVH within `search_r` and return `(signed_local_dist, local_normal, local_penetration)`.
+    fn query_local_closest(
+        &self,
+        local_p: Vec3,
+        local_r: f32,
+        search_r: f32,
+    ) -> Option<(f32, Vec3, f32)> {
+        let mut closest_dist_sq = search_r * search_r;
+        let mut query_rad = search_r;
+        let mut found = false;
+        let mut best_dist = search_r;
+        let mut best_normal = Vec3::ZERO;
+        let mut best_pen = 0.0f32;
+
+        let nodes = &self.bvh.nodes;
+        let tris = &*self.triangles;
+        let mut stack = [0u32; 64];
+        let mut sp = 1usize;
+
+        while sp > 0 {
+            sp -= 1;
+            let node = &nodes[stack[sp] as usize];
+
+            if local_p.x + query_rad < node.min.x
+                || local_p.x - query_rad > node.max.x
+                || local_p.y + query_rad < node.min.y
+                || local_p.y - query_rad > node.max.y
+                || local_p.z + query_rad < node.min.z
+                || local_p.z - query_rad > node.max.z
+            {
+                continue;
+            }
+
+            if (node.count_or_right & 0x8000_0000) != 0 {
+                let first = node.left_or_first as usize;
+                let count = (node.count_or_right & 0x7FFF_FFFF) as usize;
+                for tri in &tris[first..first + count] {
+                    let closest = tri.closest_point(local_p);
+                    let diff = local_p - closest;
+                    let dist_sq = diff.length_squared();
+
+                    if dist_sq < closest_dist_sq {
+                        let dist = dist_sq.sqrt();
+                        let (normal, pen, signed_dist) = if dist > 1e-7 {
+                            let n = diff / dist;
+                            if n.dot(tri.normal) < 0.0 {
+                                (tri.normal, local_r + dist, -dist)
+                            } else {
+                                (n, local_r - dist, dist)
+                            }
+                        } else {
+                            (tri.normal, local_r, 0.0)
+                        };
+
+                        best_dist = signed_dist;
+                        best_normal = normal;
+                        best_pen = pen;
+                        closest_dist_sq = dist_sq;
+                        query_rad = dist;
+                        found = true;
+                    }
+                }
+            } else if sp + 2 <= stack.len() {
+                stack[sp] = node.count_or_right;
+                stack[sp + 1] = node.left_or_first;
+                sp += 2;
+            }
+        }
+
+        if found {
+            Some((best_dist, best_normal, best_pen))
+        } else {
+            None
+        }
+    }
+
+    /// Return `(world_surface_distance, world_outward_normal)` if `pos` is within `max_dist` of this mesh.
+    pub fn closest_surface_sample(&self, pos: Vec3, max_dist: f32) -> Option<(f32, Vec3)> {
+        if !pos.is_finite() || self.bvh.nodes.is_empty() || max_dist <= 0.0 {
+            return None;
+        }
+        let inflated_min = self.world_bounds.min - Vec3::splat(max_dist);
+        let inflated_max = self.world_bounds.max + Vec3::splat(max_dist);
+        if pos.x < inflated_min.x
+            || pos.x > inflated_max.x
+            || pos.y < inflated_min.y
+            || pos.y > inflated_max.y
+            || pos.z < inflated_min.z
+            || pos.z > inflated_max.z
+        {
+            return None;
+        }
+
+        let rot_mat = self.rotation_matrix();
+        let inv_rot = rot_mat.transpose();
+        let inv_s = 1.0 / self.scale.max(1e-4);
+        let local_p = inv_rot * (pos - self.position) * inv_s;
+
+        let (local_dist, local_n, _) = self.query_local_closest(local_p, 0.0, max_dist * inv_s)?;
+        let world_n = (rot_mat * local_n).normalize_or_zero();
+        if world_n.length_squared() <= 0.5 || !world_n.is_finite() {
+            return None;
+        }
+        Some(((local_dist * self.scale).max(0.0), world_n))
     }
 
     /// Resolve particle collision against this mesh using local-space BVH traversal.
@@ -659,98 +775,34 @@ impl TriangleMesh {
             return false;
         }
 
-        // Transform particle into mesh local space
-        let rot_mat = glam::Mat3::from_euler(
-            glam::EulerRot::YXZ,
-            self.rotation.y,
-            self.rotation.x,
-            self.rotation.z,
-        );
+        let rot_mat = self.rotation_matrix();
         let inv_rot = rot_mat.transpose();
         let inv_s = 1.0 / self.scale.max(1e-4);
-
         let local_p = inv_rot * (*pos - self.position) * inv_s;
         let local_r = particle_radius * inv_s;
-        let mut closest_dist_sq = local_r * local_r;
-        let mut query_rad = local_r;
 
-        let mut collided = false;
-        let mut best_normal = Vec3::ZERO;
-        let mut best_correction = Vec3::ZERO;
+        let Some((_, best_normal, best_pen)) = self.query_local_closest(local_p, local_r, local_r)
+        else {
+            return false;
+        };
 
-        let nodes = &self.bvh.nodes;
-        let tris = &*self.triangles;
+        let world_correction = (rot_mat * (best_normal * best_pen)) * self.scale;
+        let world_normal = (rot_mat * best_normal).normalize_or_zero();
+        if world_correction.is_finite() && world_normal.length_squared() > 0.5 {
+            *pos += world_correction;
 
-        let mut stack = [0u32; 64];
-        let mut sp = 1usize;
-
-        while sp > 0 {
-            sp -= 1;
-            let node = &nodes[stack[sp] as usize];
-
-            if local_p.x + query_rad < node.min.x
-                || local_p.x - query_rad > node.max.x
-                || local_p.y + query_rad < node.min.y
-                || local_p.y - query_rad > node.max.y
-                || local_p.z + query_rad < node.min.z
-                || local_p.z - query_rad > node.max.z
-            {
-                continue;
-            }
-
-            if (node.count_or_right & 0x8000_0000) != 0 {
-                let first = node.left_or_first as usize;
-                let count = (node.count_or_right & 0x7FFF_FFFF) as usize;
-                for tri in &tris[first..first + count] {
-                    let closest = tri.closest_point(local_p);
-                    let diff = local_p - closest;
-                    let dist_sq = diff.length_squared();
-
-                    if dist_sq < closest_dist_sq {
-                        let dist = dist_sq.sqrt();
-                        let (normal, pen) = if dist > 1e-7 {
-                            let n = diff / dist;
-                            if n.dot(tri.normal) < 0.0 {
-                                (tri.normal, local_r + dist)
-                            } else {
-                                (n, local_r - dist)
-                            }
-                        } else {
-                            (tri.normal, local_r)
-                        };
-
-                        best_correction = normal * pen;
-                        best_normal = normal;
-                        closest_dist_sq = dist_sq;
-                        query_rad = dist;
-                        collided = true;
-                    }
+            let vn = vel.dot(world_normal);
+            if vn < 0.0 {
+                let eff_restitution = if vn < -0.15 { restitution } else { 0.0 };
+                let normal_impulse = -(1.0 + eff_restitution) * vn * world_normal;
+                let mut new_vel = *vel + normal_impulse;
+                let vt = new_vel - world_normal * new_vel.dot(world_normal);
+                new_vel -= vt * ((1.0 - friction) * 0.1).clamp(0.0, 0.5);
+                if new_vel.is_finite() {
+                    *vel = new_vel;
                 }
-            } else if sp + 2 <= stack.len() {
-                stack[sp] = node.count_or_right;
-                stack[sp + 1] = node.left_or_first;
-                sp += 2;
             }
-        }
-
-        if collided {
-            let world_correction = (rot_mat * best_correction) * self.scale;
-            let world_normal = (rot_mat * best_normal).normalize_or_zero();
-            if world_correction.is_finite() && world_normal.length_squared() > 0.5 {
-                *pos += world_correction;
-
-                let vn = vel.dot(world_normal);
-                if vn < 0.0 {
-                    let normal_impulse = -(1.0 + restitution) * vn * world_normal;
-                    let mut new_vel = *vel + normal_impulse;
-                    let vt = new_vel - world_normal * new_vel.dot(world_normal);
-                    new_vel -= vt * (1.0 - friction);
-                    if new_vel.is_finite() {
-                        *vel = new_vel;
-                    }
-                }
-                return true;
-            }
+            return true;
         }
 
         false

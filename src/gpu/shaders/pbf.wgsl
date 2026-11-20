@@ -47,6 +47,170 @@ struct Particle {
 @group(0) @binding(5) var<storage, read_write> delta_positions: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read_write> grid_heads: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> grid_next: array<u32>;
+@group(0) @binding(8) var<storage, read> mesh_data: array<vec4<f32>>;
+
+struct MeshHit {
+    hit: u32,
+    dist: f32,
+    pen: f32,
+    normal: vec3<f32>,
+};
+
+fn closest_point_tri_gpu(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
+    let ab = b - a;
+    let ac = c - a;
+    let ap = p - a;
+    let d1 = dot(ab, ap);
+    let d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) { return a; }
+
+    let bp = p - b;
+    let d3 = dot(ab, bp);
+    let d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) { return b; }
+
+    let vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        let denom = d1 - d3;
+        return select(a, a + ab * (d1 / denom), abs(denom) > 1e-12);
+    }
+
+    let cp = p - c;
+    let d5 = dot(ab, cp);
+    let d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) { return c; }
+
+    let vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        let denom = d2 - d6;
+        return select(a, a + ac * (d2 / denom), abs(denom) > 1e-12);
+    }
+
+    let va = d3 * d6 - d5 * d4;
+    let d43 = d4 - d3;
+    let d56 = d5 - d6;
+    if (va <= 0.0 && d43 >= 0.0 && d56 >= 0.0) {
+        let denom = d43 + d56;
+        return select(b, b + (c - b) * (d43 / denom), abs(denom) > 1e-12);
+    }
+
+    let sum = va + vb + vc;
+    if (abs(sum) <= 1e-12) { return a; }
+    let inv_sum = 1.0 / sum;
+    return a + ab * (vb * inv_sum) + ac * (vc * inv_sum);
+}
+
+fn query_mesh_gpu(m: u32, world_pos: vec3<f32>, search_world_r: f32, col_world_r: f32) -> MeshHit {
+    var res = MeshHit(0u, 0.0, 0.0, vec3<f32>(0.0));
+    let base = m * 6u;
+    let hdr0 = mesh_data[base + 0u];
+    let hdr1 = mesh_data[base + 1u];
+    let w_min = hdr0.xyz - vec3<f32>(search_world_r);
+    let w_max = hdr1.xyz + vec3<f32>(search_world_r);
+    if (world_pos.x < w_min.x || world_pos.x > w_max.x ||
+        world_pos.y < w_min.y || world_pos.y > w_max.y ||
+        world_pos.z < w_min.z || world_pos.z > w_max.z) {
+        return res;
+    }
+
+    let node_off = bitcast<u32>(hdr0.w);
+    let tri_off = bitcast<u32>(hdr1.w);
+    let hdr2 = mesh_data[base + 2u];
+    let hdr3 = mesh_data[base + 3u];
+    let hdr4 = mesh_data[base + 4u];
+    let hdr5 = mesh_data[base + 5u];
+
+    let mesh_pos = hdr2.xyz;
+    let inv_s = hdr2.w;
+    let r0 = hdr3.xyz;
+    let scale = hdr3.w;
+    let r1 = hdr4.xyz;
+    let r2 = hdr5.xyz;
+
+    let d_world = (world_pos - mesh_pos) * inv_s;
+    let local_p = vec3<f32>(dot(r0, d_world), dot(r1, d_world), dot(r2, d_world));
+    let search_local_r = search_world_r * inv_s;
+    let col_local_r = col_world_r * inv_s;
+
+    var closest_dist_sq = search_local_r * search_local_r;
+    var query_rad = search_local_r;
+    var found = false;
+    var best_dist = search_local_r;
+    var best_n_local = vec3<f32>(0.0);
+    var best_pen = 0.0;
+
+    var stack: array<u32, 64>;
+    stack[0] = 0u;
+    var sp = 1u;
+
+    while (sp > 0u) {
+        sp -= 1u;
+        let n_idx = stack[sp];
+        let nv0 = mesh_data[node_off + n_idx * 2u];
+        let nv1 = mesh_data[node_off + n_idx * 2u + 1u];
+        let nmin = nv0.xyz;
+        let nmax = nv1.xyz;
+
+        if (local_p.x + query_rad < nmin.x || local_p.x - query_rad > nmax.x ||
+            local_p.y + query_rad < nmin.y || local_p.y - query_rad > nmax.y ||
+            local_p.z + query_rad < nmin.z || local_p.z - query_rad > nmax.z) {
+            continue;
+        }
+
+        let left_or_first = bitcast<u32>(nv0.w);
+        let count_or_right = bitcast<u32>(nv1.w);
+        if ((count_or_right & 0x80000000u) != 0u) {
+            let count = count_or_right & 0x7FFFFFFFu;
+            for (var ti = 0u; ti < count; ti++) {
+                let tb = tri_off + (left_or_first + ti) * 4u;
+                let ta = mesh_data[tb + 0u].xyz;
+                let tbb = mesh_data[tb + 1u].xyz;
+                let tc = mesh_data[tb + 2u].xyz;
+                let tn = mesh_data[tb + 3u].xyz;
+                let cp = closest_point_tri_gpu(local_p, ta, tbb, tc);
+                let diff = local_p - cp;
+                let d2 = dot(diff, diff);
+                if (d2 < closest_dist_sq) {
+                    let dist = sqrt(d2);
+                    var n_loc = tn;
+                    var pen_loc = col_local_r;
+                    var signed_d = 0.0;
+                    if (dist > 1e-7) {
+                        let nd = diff / dist;
+                        if (dot(nd, tn) < 0.0) {
+                            n_loc = tn;
+                            pen_loc = col_local_r + dist;
+                            signed_d = -dist;
+                        } else {
+                            n_loc = nd;
+                            pen_loc = col_local_r - dist;
+                            signed_d = dist;
+                        }
+                    }
+                    best_dist = signed_d;
+                    best_n_local = n_loc;
+                    best_pen = pen_loc;
+                    closest_dist_sq = d2;
+                    query_rad = dist;
+                    found = true;
+                }
+            }
+        } else if (sp + 2u <= 64u) {
+            stack[sp] = count_or_right;
+            stack[sp + 1u] = left_or_first;
+            sp += 2u;
+        }
+    }
+
+    if (found) {
+        let wn_raw = r0 * best_n_local.x + r1 * best_n_local.y + r2 * best_n_local.z;
+        let wn_len2 = dot(wn_raw, wn_raw);
+        if (wn_len2 > 1e-8) {
+            res = MeshHit(1u, max(best_dist * scale, 0.0), best_pen * scale, wn_raw * inverseSqrt(wn_len2));
+        }
+    }
+    return res;
+}
 
 fn poly6(r2: f32, h2: f32, poly6_factor: f32) -> f32 {
     if (r2 < h2 && r2 >= 0.0) {
@@ -317,7 +481,7 @@ fn boundary_contribution_gpu(pos: vec3<f32>) -> BoundaryContrib {
     }
 
     let d_obs_offset = s;
-    let num_colliders = min(uniforms.counts.w & 0x7FFFFFFFu, 16u);
+    let num_colliders = min(uniforms.counts.w & 0xFFu, 16u);
     for (var c = 0u; c < num_colliders; c++) {
         let col = uniforms.colliders[c];
         if (col.info.y == 0u) { continue; }
@@ -361,6 +525,17 @@ fn boundary_contribution_gpu(pos: vec3<f32>) -> BoundaryContrib {
                         bc = fold_wall_gpu(bc, dist, n, d_obs_offset, h, inv_h, gamma_w);
                     }
                 }
+            }
+        }
+    }
+
+    let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
+    for (var m = 0u; m < num_meshes; m++) {
+        let mh = query_mesh_gpu(m, pos, radius + h, radius);
+        if (mh.hit != 0u) {
+            let d_c = mh.dist - radius;
+            if (d_c < h) {
+                bc = fold_wall_gpu(bc, d_c, mh.normal, d_obs_offset, h, inv_h, gamma_w);
             }
         }
     }
@@ -676,7 +851,7 @@ fn apply_delta_and_collide(@builtin(global_invocation_id) id: vec3<u32>) {
     pos = resolve_chamber_gpu(pos, radius);
     
     // Dynamic Obstacles Collision Resolution (Spheres, Boxes, Cylinders)
-    let num_colliders = min(uniforms.counts.w & 0x7FFFFFFFu, 16u);
+    let num_colliders = min(uniforms.counts.w & 0xFFu, 16u);
     for (var c = 0u; c < num_colliders; c++) {
         let col = uniforms.colliders[c];
         if (col.info.y == 0u) { continue; }
@@ -754,6 +929,15 @@ fn apply_delta_and_collide(@builtin(global_invocation_id) id: vec3<u32>) {
         if (dist < min_d && dist > 1e-5) {
             let n = to_p / dist;
             pos = obs_pos + n * min_d;
+        }
+    }
+
+    // Dynamic .obj Triangle Mesh BVH Projection
+    let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
+    for (var m = 0u; m < num_meshes; m++) {
+        let mh = query_mesh_gpu(m, pos, radius, radius);
+        if (mh.hit != 0u && mh.pen > 0.0) {
+            pos += mh.normal * mh.pen;
         }
     }
     
@@ -920,7 +1104,7 @@ fn update_velocity_and_xsph(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // Dynamic obstacle velocity resolution (Spheres, Boxes, Cylinders)
-    let num_colliders = min(uniforms.counts.w & 0x7FFFFFFFu, 16u);
+    let num_colliders = min(uniforms.counts.w & 0xFFu, 16u);
     for (var c = 0u; c < num_colliders; c++) {
         let col = uniforms.colliders[c];
         if (col.info.y == 0u) { continue; }
@@ -994,6 +1178,24 @@ fn update_velocity_and_xsph(@builtin(global_invocation_id) id: vec3<u32>) {
                 vel -= (1.0 + eff_rest) * vn * n_obs;
                 let vt = vel - n_obs * dot(vel, n_obs);
                 vel -= vt * clamp((1.0 - c_fric) * 0.1, 0.0, 0.5);
+            }
+        }
+    }
+
+    // Triangle Mesh velocity response (inelastic settling by default)
+    let num_meshes = min((uniforms.counts.w >> 8u) & 0xFFu, 8u);
+    for (var m = 0u; m < num_meshes; m++) {
+        let search_r = radius + margin;
+        let mh = query_mesh_gpu(m, new_pos, search_r, search_r);
+        if (mh.hit != 0u) {
+            let m_rest = mesh_data[m * 6u + 4u].w;
+            let m_fric = mesh_data[m * 6u + 5u].w;
+            let vn = dot(vel, mh.normal);
+            if (vn < 0.0) {
+                let eff_rest = select(0.0, m_rest, vn < -0.15);
+                vel -= (1.0 + eff_rest) * vn * mh.normal;
+                let vt = vel - mh.normal * dot(vel, mh.normal);
+                vel -= vt * clamp((1.0 - m_fric) * 0.1, 0.0, 0.5);
             }
         }
     }

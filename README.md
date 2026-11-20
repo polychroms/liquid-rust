@@ -118,7 +118,7 @@ xattr -dr com.apple.quarantine ./liquid-rust* && ./liquid-rust
 
 ### 🪟 Windows (`x86_64`)
 
-Download `liquid-rust-windows-x86_64.zip` from the [latest release (v0.4.1)](https://github.com/rappar222/liquid-rust/releases/latest), extract `liquid-rust.exe`, and launch directly or run from PowerShell/CMD.
+Download `liquid-rust-windows-x86_64.zip` from the [latest release (v0.4.3)](https://github.com/rappar222/liquid-rust/releases/latest), extract `liquid-rust.exe`, and launch directly or run from PowerShell/CMD.
 
 ---
 

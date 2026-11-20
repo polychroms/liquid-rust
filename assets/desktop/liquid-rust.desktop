@@ -9,3 +9,4 @@ Type=Application
 Categories=Graphics;Science;Simulation;Physics;
 Keywords=fluid;liquid;simulation;3d;physics;sph;water;gpu;
 StartupNotify=true
+StartupWMClass=liquid-rust

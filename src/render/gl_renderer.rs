@@ -871,6 +871,7 @@ uniform float u_aspect;
 uniform float u_fusion;
 uniform float u_exposure;
 uniform mat3 u_inv_view_rot;
+uniform mat4 u_proj;
 
 uniform vec3 u_shallow_color;
 uniform vec3 u_deep_color;
@@ -953,6 +954,7 @@ void main() {
     // Translucent meniscus sheath around clustered droplets at intermediate Fusion (1%..99%)
     float sheath_strength = smoothstep(0.05, 0.50, u_fusion) * (1.0 - smoothstep(0.88, 1.0, u_fusion));
     if (d_sample.a < 0.5) {
+        gl_FragDepth = 1.0;
         if (sheath_strength > 0.01 && thickness > 0.05) {
             float halo = smoothstep(0.05, 0.26, thickness) * sheath_strength;
             vec3 rim_tint = mix(u_shallow_color, vec3(0.88, 0.98, 1.0), 0.45);
@@ -1078,6 +1080,9 @@ void main() {
 
     out_lin *= max(u_exposure, 0.05);
     vec3 tone = clamp((out_lin * (2.51 * out_lin + 0.03)) / (out_lin * (2.43 * out_lin + 0.59) + 0.14), 0.0, 1.0);
+    vec4 clip_p = u_proj * vec4(eye_pos, 1.0);
+    float ndc_z = (abs(clip_p.w) > 1e-5) ? (clip_p.z / clip_p.w) : 1.0;
+    gl_FragDepth = clamp(ndc_z * 0.5 + 0.5, 0.0, 1.0);
     FragColor = vec4(pow(tone, vec3(1.0 / 2.2)), 1.0);
 }
 "#;
@@ -1321,77 +1326,7 @@ void main() {
             self.line_scratch.push(LineVertex { pos: p1.to_array() });
         }
 
-        for collider in colliders {
-            if collider.enabled {
-                if is_2d {
-                    match &collider.shape {
-                        ColliderShape::Sphere { center, radius } => {
-                            Self::generate_circle_lines_xy(
-                                *center,
-                                *radius,
-                                36,
-                                &mut self.line_scratch,
-                            );
-                        }
-                        ColliderShape::Box { aabb } => {
-                            let p0 = Vec3::new(aabb.min.x, aabb.min.y, 0.0);
-                            let p1 = Vec3::new(aabb.max.x, aabb.min.y, 0.0);
-                            let p2 = Vec3::new(aabb.max.x, aabb.max.y, 0.0);
-                            let p3 = Vec3::new(aabb.min.x, aabb.max.y, 0.0);
-                            self.line_scratch.push(LineVertex { pos: p0.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p1.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p1.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p2.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p2.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p3.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p3.to_array() });
-                            self.line_scratch.push(LineVertex { pos: p0.to_array() });
-                        }
-                        ColliderShape::Cylinder { center, radius, .. } => {
-                            Self::generate_circle_lines_xy(
-                                *center,
-                                *radius,
-                                36,
-                                &mut self.line_scratch,
-                            );
-                        }
-                        ColliderShape::Mesh(mesh) => {
-                            Self::generate_mesh_lines(mesh, &mut self.line_scratch);
-                        }
-                    }
-                } else {
-                    match &collider.shape {
-                        ColliderShape::Sphere { center, radius } => {
-                            Self::generate_sphere_lines(
-                                *center,
-                                *radius,
-                                28,
-                                &mut self.line_scratch,
-                            );
-                        }
-                        ColliderShape::Box { aabb } => {
-                            Self::generate_box_lines(aabb, &mut self.line_scratch);
-                        }
-                        ColliderShape::Cylinder {
-                            center,
-                            radius,
-                            height,
-                        } => {
-                            Self::generate_cylinder_lines(
-                                *center,
-                                *radius,
-                                *height,
-                                20,
-                                &mut self.line_scratch,
-                            );
-                        }
-                        ColliderShape::Mesh(mesh) => {
-                            Self::generate_mesh_lines(mesh, &mut self.line_scratch);
-                        }
-                    }
-                }
-            }
-        }
+        Self::append_collider_lines(colliders, is_2d, &mut self.line_scratch);
 
         for faucet in faucets {
             if faucet.enabled {
@@ -1405,32 +1340,143 @@ void main() {
             }
         }
 
-        if !self.line_scratch.is_empty() {
-            gl.enable(glow::BLEND);
-            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-            gl.use_program(Some(self.line_program));
+        let col = if self.env_preset.is_light_backdrop() {
+            [0.10, 0.36, 0.70, 0.74]
+        } else {
+            [0.34, 0.68, 0.96, 0.78]
+        };
+        self.draw_line_batch(gl, view_proj, col, 1.5, &self.line_scratch);
+    }
 
-            let u_vp = gl.get_uniform_location(self.line_program, "u_view_proj");
-            let u_col = gl.get_uniform_location(self.line_program, "u_line_color");
-
-            gl.uniform_matrix_4_f32_slice(u_vp.as_ref(), false, &view_proj.to_cols_array());
-            if self.env_preset.is_light_backdrop() {
-                gl.uniform_4_f32(u_col.as_ref(), 0.10, 0.36, 0.70, 0.74);
-            } else {
-                gl.uniform_4_f32(u_col.as_ref(), 0.34, 0.68, 0.96, 0.78);
+    fn append_collider_lines(
+        colliders: &[Collider],
+        is_2d: bool,
+        lines: &mut Vec<LineVertex>,
+    ) {
+        for collider in colliders {
+            if !collider.enabled {
+                continue;
             }
-
-            gl.bind_vertex_array(Some(self.line_vao));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.line_vbo));
-            gl.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
-                bytemuck::cast_slice(&self.line_scratch),
-                glow::DYNAMIC_DRAW,
-            );
-
-            gl.line_width(1.5);
-            gl.draw_arrays(glow::LINES, 0, self.line_scratch.len() as i32);
+            if is_2d {
+                match &collider.shape {
+                    ColliderShape::Sphere { center, radius } => {
+                        Self::generate_circle_lines_xy(*center, *radius, 36, lines);
+                    }
+                    ColliderShape::Box { aabb } => {
+                        let p0 = Vec3::new(aabb.min.x, aabb.min.y, 0.0);
+                        let p1 = Vec3::new(aabb.max.x, aabb.min.y, 0.0);
+                        let p2 = Vec3::new(aabb.max.x, aabb.max.y, 0.0);
+                        let p3 = Vec3::new(aabb.min.x, aabb.max.y, 0.0);
+                        lines.push(LineVertex { pos: p0.to_array() });
+                        lines.push(LineVertex { pos: p1.to_array() });
+                        lines.push(LineVertex { pos: p1.to_array() });
+                        lines.push(LineVertex { pos: p2.to_array() });
+                        lines.push(LineVertex { pos: p2.to_array() });
+                        lines.push(LineVertex { pos: p3.to_array() });
+                        lines.push(LineVertex { pos: p3.to_array() });
+                        lines.push(LineVertex { pos: p0.to_array() });
+                    }
+                    ColliderShape::Cylinder { center, radius, .. } => {
+                        Self::generate_circle_lines_xy(*center, *radius, 36, lines);
+                    }
+                    ColliderShape::Mesh(mesh) => {
+                        Self::generate_mesh_lines(mesh, lines);
+                    }
+                }
+            } else {
+                match &collider.shape {
+                    ColliderShape::Sphere { center, radius } => {
+                        Self::generate_sphere_lines(*center, *radius, 28, lines);
+                    }
+                    ColliderShape::Box { aabb } => {
+                        Self::generate_box_lines(aabb, lines);
+                    }
+                    ColliderShape::Cylinder {
+                        center,
+                        radius,
+                        height,
+                    } => {
+                        Self::generate_cylinder_lines(*center, *radius, *height, 20, lines);
+                    }
+                    ColliderShape::Mesh(mesh) => {
+                        Self::generate_mesh_lines(mesh, lines);
+                    }
+                }
+            }
         }
+    }
+
+    unsafe fn draw_line_batch(
+        &self,
+        gl: &Arc<glow::Context>,
+        view_proj: Mat4,
+        color: [f32; 4],
+        width: f32,
+        lines: &[LineVertex],
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        gl.enable(glow::BLEND);
+        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        gl.use_program(Some(self.line_program));
+
+        let u_vp = gl.get_uniform_location(self.line_program, "u_view_proj");
+        let u_col = gl.get_uniform_location(self.line_program, "u_line_color");
+        gl.uniform_matrix_4_f32_slice(u_vp.as_ref(), false, &view_proj.to_cols_array());
+        gl.uniform_4_f32(u_col.as_ref(), color[0], color[1], color[2], color[3]);
+
+        gl.bind_vertex_array(Some(self.line_vao));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.line_vbo));
+        gl.buffer_data_u8_slice(
+            glow::ARRAY_BUFFER,
+            bytemuck::cast_slice(lines),
+            glow::DYNAMIC_DRAW,
+        );
+
+        gl.line_width(width);
+        gl.draw_arrays(glow::LINES, 0, lines.len() as i32);
+    }
+
+    /// Composite front and underwater collider/scene wireframes over SSFR depth so
+    /// loaded `.obj` models never disappear when liquid is behind or in front of them.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn draw_ssfr_wireframe_overlay(
+        &mut self,
+        gl: &Arc<glow::Context>,
+        view_proj: Mat4,
+        chamber: &crate::sph::chamber::Chamber,
+        bounds: Aabb,
+        colliders: &[Collider],
+        faucets: &[Faucet],
+        drains: &[Drain],
+        is_2d: bool,
+    ) {
+        if !self.show_wireframe {
+            return;
+        }
+        let prev_grid = self.show_grid;
+        self.show_grid = false;
+        gl.enable(glow::DEPTH_TEST);
+        gl.depth_mask(false);
+        gl.depth_func(glow::LEQUAL);
+        self.draw_scene_wireframes(
+            gl, view_proj, chamber, bounds, colliders, faucets, drains, is_2d,
+        );
+        self.show_grid = prev_grid;
+
+        self.line_scratch.clear();
+        Self::append_collider_lines(colliders, is_2d, &mut self.line_scratch);
+        if !self.line_scratch.is_empty() {
+            let submerged_col = if self.env_preset.is_light_backdrop() {
+                [0.10, 0.38, 0.74, 0.42]
+            } else {
+                [0.42, 0.78, 1.0, 0.40]
+            };
+            gl.depth_func(glow::GREATER);
+            self.draw_line_batch(gl, view_proj, submerged_col, 1.35, &self.line_scratch);
+        }
+        gl.depth_func(glow::LEQUAL);
     }
 
     /// Render particles and simulation bounds
@@ -2200,12 +2246,17 @@ void main() {
                 gl.draw_arrays(glow::TRIANGLES, 0, 3);
             }
 
-            // Pass E: Composite Optical Water onto active egui framebuffer
+            // Pass E: Composite Optical Water onto active egui framebuffer (and record fluid surface depth)
             gl.bind_framebuffer(glow::FRAMEBUFFER, prev_fbo_handle);
             gl.viewport(vp_rect[0], vp_rect[1], vp_rect[2], vp_rect[3]);
             if was_scissor {
                 gl.enable(glow::SCISSOR_TEST);
             }
+            gl.clear_depth_f32(1.0);
+            gl.clear(glow::DEPTH_BUFFER_BIT);
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::ALWAYS);
+            gl.depth_mask(true);
 
             gl.use_program(Some(self.ssfr_composite_program));
             gl.active_texture(glow::TEXTURE0);
@@ -2240,6 +2291,11 @@ void main() {
                 gl.get_uniform_location(cp, "u_inv_view_rot").as_ref(),
                 false,
                 &inv_view_rot.to_cols_array(),
+            );
+            gl.uniform_matrix_4_f32_slice(
+                gl.get_uniform_location(cp, "u_proj").as_ref(),
+                false,
+                &proj.to_cols_array(),
             );
 
             let ld = mesh_cfg.light_dir.normalize_or_zero();
@@ -2320,15 +2376,23 @@ void main() {
 
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
 
-            // Clean texture/FBO/OpenGL state for egui
+            // Clean texture units before Pass F depth-tested wireframe overlay
             for unit in [glow::TEXTURE3, glow::TEXTURE2, glow::TEXTURE1, glow::TEXTURE0] {
                 gl.active_texture(unit);
                 gl.bind_texture(glow::TEXTURE_2D, None);
             }
+
+            // Pass F: Depth-aware front & underwater wireframes so OBJ models remain visible both in front of and behind liquid
+            self.draw_ssfr_wireframe_overlay(
+                gl, view_proj, chamber, bounds, colliders, faucets, drains, is_2d,
+            );
+
+            // Clean VAO/VBO/OpenGL state for egui
             gl.bind_vertex_array(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.use_program(None);
             gl.disable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
             gl.depth_mask(true);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);

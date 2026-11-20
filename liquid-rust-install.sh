@@ -96,10 +96,14 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
 fi
 
 SOURCE_BIN=""
+SOURCE_ICON=""
 if [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/liquid-rust" ]; then
     BIN_SIZE="$(wc -c < "$SCRIPT_DIR/liquid-rust" | tr -d '[:space:]')"
     if [ "${BIN_SIZE:-0}" -ge 65536 ]; then
         SOURCE_BIN="$SCRIPT_DIR/liquid-rust"
+        if [ -f "$SCRIPT_DIR/liquid-rust.png" ]; then
+            SOURCE_ICON="$SCRIPT_DIR/liquid-rust.png"
+        fi
         echo -e "${CYAN}⚙ Found extracted binary (${SOURCE_BIN}), installing locally...${RESET}"
     fi
 fi
@@ -125,6 +129,9 @@ if [ -z "$SOURCE_BIN" ]; then
         exit 1
     fi
     SOURCE_BIN="$TMP_DIR/liquid-rust"
+    if [ -f "$TMP_DIR/liquid-rust.png" ]; then
+        SOURCE_ICON="$TMP_DIR/liquid-rust.png"
+    fi
 fi
 
 chmod 0755 "$SOURCE_BIN"
@@ -151,8 +158,21 @@ if [ "$OS_NAME" = "Darwin" ]; then
 fi
 $SUDO mv -f "${TARGET_BIN}.new" "$TARGET_BIN"
 
-# 5. Install desktop application entry on Linux
+# 5. Install desktop application entry & icon on Linux
 if [ "$OS_NAME" = "Linux" ]; then
+    if [ -n "$SOURCE_ICON" ] && [ -f "$SOURCE_ICON" ]; then
+        if [ -d "/usr/share/icons/hicolor" ]; then
+            $SUDO mkdir -p "/usr/share/icons/hicolor/256x256/apps"
+            $SUDO install -m 0644 "$SOURCE_ICON" "/usr/share/icons/hicolor/256x256/apps/liquid-rust.png" || true
+            if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+                $SUDO gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+            fi
+        fi
+        if [ -d "/usr/share/pixmaps" ]; then
+            $SUDO install -m 0644 "$SOURCE_ICON" "/usr/share/pixmaps/liquid-rust.png" || true
+        fi
+    fi
+
     DESKTOP_TMP="$TMP_DIR/liquid-rust.desktop"
     cat <<EOF > "$DESKTOP_TMP"
 [Desktop Entry]
@@ -160,6 +180,7 @@ Name=Liquid-Rust
 Comment=High-Performance 3D/2D SPH Fluid Simulator (GPU Accelerated)
 Exec=${TARGET_BIN}
 Icon=liquid-rust
+StartupWMClass=liquid-rust
 Terminal=false
 Type=Application
 Categories=Graphics;Science;Simulation;

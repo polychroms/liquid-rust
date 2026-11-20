@@ -43,6 +43,10 @@ pub struct GpuParticle {
     pub vel_dens: [f32; 4], // xyz = velocity, w = density
 }
 
+type MeshSignature = Vec<(u32, usize, [u32; 3], u32, [u32; 3], u32, u32)>;
+const MAX_GPU_MESHES: usize = 8;
+const MESH_HEADER_VEC4S: usize = 6;
+
 pub struct GpuSphSolver {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
@@ -69,6 +73,9 @@ pub struct GpuSphSolver {
     grid_heads_buf: Option<wgpu::Buffer>,
     grid_next_buf: Option<wgpu::Buffer>,
     readback_buf: Option<wgpu::Buffer>,
+    mesh_data_buf: wgpu::Buffer,
+    mesh_data_capacity: usize,
+    cached_mesh_signature: MeshSignature,
 
     pub particle_count: usize,
     pub particle_capacity: usize,
@@ -208,6 +215,17 @@ impl GpuSphSolver {
                     },
                     count: None,
                 },
+                // 8: mesh_data (packed BVH headers, nodes, and triangles)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -296,6 +314,13 @@ impl GpuSphSolver {
             mapped_at_creation: false,
         });
 
+        let dummy_mesh = [[0.0f32; 4]; MESH_HEADER_VEC4S];
+        let mesh_data_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("PBF Mesh BVH Buffer"),
+            contents: bytemuck::cast_slice(&dummy_mesh),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
         let mut solver = Self {
             device,
             queue,
@@ -319,6 +344,9 @@ impl GpuSphSolver {
             grid_heads_buf: None,
             grid_next_buf: None,
             readback_buf: None,
+            mesh_data_buf,
+            mesh_data_capacity: MESH_HEADER_VEC4S,
+            cached_mesh_signature: Vec::new(),
             particle_count: 0,
             particle_capacity: 0,
             total_cells: 0,
@@ -461,7 +489,41 @@ impl GpuSphSolver {
             mapped_at_creation: false,
         });
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.particle_buf = Some(p_buf);
+        self.pred_pos_buf = Some(pred_buf);
+        self.old_pos_buf = Some(old_buf);
+        self.lambdas_buf = Some(lambdas_buf);
+        self.delta_pos_buf = Some(delta_buf);
+        self.grid_heads_buf = Some(grid_heads_buf);
+        self.grid_next_buf = Some(grid_next_buf);
+        self.readback_buf = Some(readback_buf);
+        self.rebuild_bind_group();
+        Ok(())
+    }
+
+    fn rebuild_bind_group(&mut self) {
+        let (
+            Some(p_buf),
+            Some(pred_buf),
+            Some(old_buf),
+            Some(lambdas_buf),
+            Some(delta_buf),
+            Some(grid_heads_buf),
+            Some(grid_next_buf),
+        ) = (
+            self.particle_buf.as_ref(),
+            self.pred_pos_buf.as_ref(),
+            self.old_pos_buf.as_ref(),
+            self.lambdas_buf.as_ref(),
+            self.delta_pos_buf.as_ref(),
+            self.grid_heads_buf.as_ref(),
+            self.grid_next_buf.as_ref(),
+        )
+        else {
+            return;
+        };
+
+        self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("PBF Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -497,19 +559,133 @@ impl GpuSphSolver {
                     binding: 7,
                     resource: grid_next_buf.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.mesh_data_buf.as_entire_binding(),
+                },
             ],
-        });
+        }));
+    }
 
-        self.particle_buf = Some(p_buf);
-        self.pred_pos_buf = Some(pred_buf);
-        self.old_pos_buf = Some(old_buf);
-        self.lambdas_buf = Some(lambdas_buf);
-        self.delta_pos_buf = Some(delta_buf);
-        self.grid_heads_buf = Some(grid_heads_buf);
-        self.grid_next_buf = Some(grid_next_buf);
-        self.readback_buf = Some(readback_buf);
-        self.bind_group = Some(bind_group);
-        Ok(())
+    fn sync_mesh_colliders(&mut self, colliders: &[Collider]) -> u32 {
+        let mut meshes = Vec::with_capacity(MAX_GPU_MESHES);
+        let mut sig: MeshSignature = Vec::with_capacity(MAX_GPU_MESHES);
+        for col in colliders.iter().filter(|c| c.enabled) {
+            if meshes.len() >= MAX_GPU_MESHES {
+                break;
+            }
+            if let ColliderShape::Mesh(ref mesh) = col.shape {
+                if mesh.bvh_nodes().is_empty() || mesh.triangles.is_empty() {
+                    continue;
+                }
+                sig.push((
+                    col.id,
+                    Arc::as_ptr(mesh) as usize,
+                    [
+                        mesh.position.x.to_bits(),
+                        mesh.position.y.to_bits(),
+                        mesh.position.z.to_bits(),
+                    ],
+                    mesh.scale.to_bits(),
+                    [
+                        mesh.rotation.x.to_bits(),
+                        mesh.rotation.y.to_bits(),
+                        mesh.rotation.z.to_bits(),
+                    ],
+                    col.restitution.to_bits(),
+                    col.friction.to_bits(),
+                ));
+                meshes.push((col, mesh));
+            }
+        }
+
+        if sig == self.cached_mesh_signature {
+            return meshes.len() as u32;
+        }
+        self.cached_mesh_signature = sig;
+        if meshes.is_empty() {
+            return 0;
+        }
+
+        let header_vec4s = meshes.len() * MESH_HEADER_VEC4S;
+        let total_nodes: usize = meshes.iter().map(|(_, m)| m.bvh_nodes().len()).sum();
+        let total_tris: usize = meshes.iter().map(|(_, m)| m.triangles.len()).sum();
+        let total_vec4s = header_vec4s + total_nodes * 2 + total_tris * 4;
+        let limits = self.device.limits();
+        if (total_vec4s * 16) as u64 > limits.max_storage_buffer_binding_size as u64 {
+            return 0;
+        }
+
+        let mut packed = vec![[0.0f32; 4]; total_vec4s];
+        let mut cursor = header_vec4s;
+        for (m_idx, (col, mesh)) in meshes.iter().enumerate() {
+            let nodes = mesh.bvh_nodes();
+            let node_offset = cursor as u32;
+            for node in nodes {
+                packed[cursor] = [
+                    node.min.x,
+                    node.min.y,
+                    node.min.z,
+                    f32::from_bits(node.left_or_first),
+                ];
+                packed[cursor + 1] = [
+                    node.max.x,
+                    node.max.y,
+                    node.max.z,
+                    f32::from_bits(node.count_or_right),
+                ];
+                cursor += 2;
+            }
+            let tri_offset = cursor as u32;
+            for tri in mesh.triangles.iter() {
+                packed[cursor] = [tri.a.x, tri.a.y, tri.a.z, 0.0];
+                packed[cursor + 1] = [tri.b.x, tri.b.y, tri.b.z, 0.0];
+                packed[cursor + 2] = [tri.c.x, tri.c.y, tri.c.z, 0.0];
+                packed[cursor + 3] = [tri.normal.x, tri.normal.y, tri.normal.z, 0.0];
+                cursor += 4;
+            }
+
+            let inv_rot = mesh.rotation_matrix().transpose();
+            let r0 = inv_rot.row(0);
+            let r1 = inv_rot.row(1);
+            let r2 = inv_rot.row(2);
+            let inv_s = 1.0 / mesh.scale.max(1e-4);
+            let hb = m_idx * MESH_HEADER_VEC4S;
+            packed[hb] = [
+                mesh.world_bounds.min.x,
+                mesh.world_bounds.min.y,
+                mesh.world_bounds.min.z,
+                f32::from_bits(node_offset),
+            ];
+            packed[hb + 1] = [
+                mesh.world_bounds.max.x,
+                mesh.world_bounds.max.y,
+                mesh.world_bounds.max.z,
+                f32::from_bits(tri_offset),
+            ];
+            packed[hb + 2] = [mesh.position.x, mesh.position.y, mesh.position.z, inv_s];
+            packed[hb + 3] = [r0.x, r0.y, r0.z, mesh.scale];
+            packed[hb + 4] = [r1.x, r1.y, r1.z, col.restitution];
+            packed[hb + 5] = [r2.x, r2.y, r2.z, col.friction];
+        }
+
+        if total_vec4s > self.mesh_data_capacity {
+            let new_cap = total_vec4s.next_power_of_two().max(64);
+            let mut grown = vec![[0.0f32; 4]; new_cap];
+            grown[..total_vec4s].copy_from_slice(&packed);
+            self.mesh_data_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("PBF Mesh BVH Buffer"),
+                contents: bytemuck::cast_slice(&grown),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+            self.mesh_data_capacity = new_cap;
+            self.rebuild_bind_group();
+        } else {
+            self.queue
+                .write_buffer(&self.mesh_data_buf, 0, bytemuck::cast_slice(&packed));
+        }
+
+        meshes.len() as u32
     }
 
     /// Incrementally synchronize CPU particle changes (e.g. faucet emissions or drain removals)
@@ -659,10 +835,11 @@ impl GpuSphSolver {
                     num_colliders += 1;
                 }
                 ColliderShape::Mesh(_) => {
-                    // Triangle meshes are resolved on CPU
+                    // Triangle meshes are packed into the BVH storage buffer via `sync_mesh_colliders`
                 }
             }
         }
+        let num_meshes = self.sync_mesh_colliders(colliders);
 
         let (m_orig, m_dir) = if let Some(ray) = mouse_ray {
             (
@@ -737,7 +914,9 @@ impl GpuSphSolver {
                 self.particle_count as u32,
                 config.solver_iterations as u32,
                 substeps as u32,
-                num_colliders | (if is_2d { 0x80000000 } else { 0 }),
+                (num_colliders & 0xFF)
+                    | ((num_meshes & 0xFF) << 8)
+                    | (if is_2d { 0x80000000 } else { 0 }),
             ],
             colliders: gpu_colliders,
             chamber_info: ch_info,

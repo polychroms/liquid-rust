@@ -13,7 +13,7 @@ use liquid_rust::scene_io::{
 };
 use liquid_rust::sph::{
     compute_lattice_rest_density, compute_lattice_rest_density_2d, Chamber, ChamberShape,
-    Collider, ColliderShape, CubeFace, Drain, Faucet, FluidPhysicsPreset, SceneGenerator,
+    Collider, CubeFace, Drain, Faucet, FluidPhysicsPreset, SceneGenerator,
     ScenePreset, SimulationQuality, SolverConfig, SphSolver,
 };
 use liquid_rust::LiquidApp;
@@ -1759,10 +1759,6 @@ fn run_headless(
         particle_count, solver.config.particle_radius, solver.config.spacing
     );
 
-    let has_mesh_col = solver
-        .colliders
-        .iter()
-        .any(|c| c.enabled && matches!(c.shape, ColliderShape::Mesh(_)));
     let has_drains = !solver.drains.is_empty();
 
     let mut gpu_solver = if !args.cpu && total_frames > 0 {
@@ -2044,7 +2040,7 @@ fn run_headless(
         let need_cpu_render =
             mp4_encoder.is_some() && matches!(cli_renderer, Some(CliRenderer::Cpu(_)));
         let need_cpu_particles =
-            has_mesh_col || has_drains || need_mesh || args.export_ply.is_some() || need_cpu_render;
+            has_drains || need_mesh || args.export_ply.is_some() || need_cpu_render;
 
         let t0 = Instant::now();
         if let Some(ref mut gpu) = gpu_solver {
@@ -2074,32 +2070,6 @@ fn run_headless(
             if need_cpu_particles {
                 gpu.read_particles(&mut solver.particles);
                 cpu_particles_synced = true;
-
-                if has_mesh_col {
-                    use rayon::prelude::*;
-                    let radius = solver.config.particle_radius;
-                    let colliders = &solver.colliders;
-                    let hit = solver
-                        .particles
-                        .par_iter_mut()
-                        .map(|p| {
-                            let mut p_hit = false;
-                            for col in colliders {
-                                if let ColliderShape::Mesh(_) = &col.shape {
-                                    p_hit |= col.resolve(&mut p.position, &mut p.velocity, radius);
-                                }
-                            }
-                            if p_hit && is_2d {
-                                p.position.z = 0.0;
-                                p.velocity.z = 0.0;
-                            }
-                            p_hit
-                        })
-                        .reduce(|| false, |a, b| a || b);
-                    if hit {
-                        gpu.sync_particles(solver.bounds, &solver.config, &solver.particles, false);
-                    }
-                }
 
                 let drained = solver.drain_particles();
                 if drained > 0 {
@@ -2370,12 +2340,19 @@ fn run_gui(
     parsed_drains: Vec<Drain>,
 ) -> Result<(), eframe::Error> {
     let window_title = "LiquidRust Studio — 2D/3D SPH & Surface Meshing";
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_app_id(if is_2d { "liquid-rust-2d" } else { "liquid-rust" })
+        .with_inner_size([1380.0, 860.0])
+        .with_min_inner_size([940.0, 560.0])
+        .with_title(window_title);
+    if let Ok(icon) =
+        eframe::icon_data::from_png_bytes(include_bytes!("../assets/icons/liquid-rust.png"))
+    {
+        viewport = viewport.with_icon(icon);
+    }
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1380.0, 860.0])
-            .with_min_inner_size([940.0, 560.0])
-            .with_title(window_title),
+        viewport,
         renderer: eframe::Renderer::Glow,
         depth_buffer: 24,
         ..Default::default()
@@ -2812,5 +2789,16 @@ mod tests {
         let cyl = parse_obstacle(&args.obstacles[0], 0).unwrap();
         assert!((cyl.restitution - 0.25).abs() < 1e-5);
         assert!((cyl.friction - 0.70).abs() < 1e-5);
+    }
+
+    #[test]
+    fn embedded_desktop_icon_decodes_cleanly() {
+        let icon = eframe::icon_data::from_png_bytes(include_bytes!(
+            "../assets/icons/liquid-rust.png"
+        ))
+        .expect("embedded desktop PNG icon should decode");
+        assert_eq!(icon.width, 256);
+        assert_eq!(icon.height, 256);
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
     }
 }

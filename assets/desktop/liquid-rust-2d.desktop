@@ -9,3 +9,4 @@ Type=Application
 Categories=Graphics;Science;Simulation;Physics;
 Keywords=fluid;liquid;simulation;2d;physics;sph;water;sandbox;
 StartupNotify=true
+StartupWMClass=liquid-rust-2d

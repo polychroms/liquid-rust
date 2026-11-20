@@ -45,8 +45,10 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/liquid-rust dist/liquid-rust
           cp liquid-rust-install.sh dist/liquid-rust-install.sh
+          cp assets/icons/liquid-rust.png dist/liquid-rust.png
           chmod 0755 dist/liquid-rust dist/liquid-rust-install.sh
-          tar -C dist -czvf dist/${{ matrix.artifact }} liquid-rust liquid-rust-install.sh
+          chmod 0644 dist/liquid-rust.png
+          tar -C dist -czvf dist/${{ matrix.artifact }} liquid-rust liquid-rust-install.sh liquid-rust.png
       - name: Upload Linux Tarball
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
