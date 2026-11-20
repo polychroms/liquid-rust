@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const GITHUB_REPO: &str = "rappar222/liquid-rust";
+pub const GITHUB_REPO: &str = "polychroms/liquid-rust";
 pub const GITHUB_LATEST_RELEASE_API: &str =
-    "https://api.github.com/repos/rappar222/liquid-rust/releases/latest";
+    "https://api.github.com/repos/polychroms/liquid-rust/releases/latest";
 
 #[derive(Deserialize, Debug)]
 struct GithubAssetJson {

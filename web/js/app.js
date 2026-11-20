@@ -11,7 +11,7 @@ import { WebGpuRenderer } from './webgpu-renderer.js?v=20261120b';
 
 const RELEASE_LATEST = 'https://github.com/polychroms/liquid-rust/releases/latest';
 const RELEASE_DL = `${RELEASE_LATEST}/download`;
-const RELEASE_VER_DL = 'https://github.com/polychroms/liquid-rust/releases/download/v0.4.5';
+const RELEASE_VER_DL = 'https://github.com/polychroms/liquid-rust/releases/download/v1.0.0';
 const ANDROID_APK_URL = `${RELEASE_DL}/liquid-rust-android.apk`;
 const IOS_IPA_URL = `${RELEASE_DL}/liquid-rust-ios.ipa`;
 

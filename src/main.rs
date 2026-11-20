@@ -25,7 +25,7 @@ use std::time::Instant;
 #[derive(Parser, Debug)]
 #[command(
     name = "liquid-rust",
-    author = "Radu <rappar222>",
+    author = "Radu <polychroms>",
     version,
     about = "Studio-grade 2D/3D SPH Fluid Simulator in Rust with Surface Meshing, PBR Optics, Real-Time Viewport & MP4/PNG/OBJ/PLY Export"
 )]

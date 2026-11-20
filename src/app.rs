@@ -10315,7 +10315,7 @@ impl LiquidApp {
                             ui.spinner();
                             ui.label(
                                 egui::RichText::new(
-                                    "Checking GitHub Releases (rappar222/liquid-rust)...",
+                                    "Checking GitHub Releases (polychroms/liquid-rust)...",
                                 )
                                 .size(13.5),
                             );

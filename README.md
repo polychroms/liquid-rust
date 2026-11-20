@@ -13,7 +13,7 @@ A high-performance, real-time 3D fluid simulation engine written in Rust using P
 Install `liquid-rust` system-wide into `/bin` (both GUI & CLI, runnable from anywhere) with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/polychroms/liquid-rust/main/liquid-rust-install.sh | bash
 ```
 
 Once installed, run `liquid-rust` from any directory — and update anytime via the built-in Studio GUI updater or CLI (`liquid-rust --update`).
@@ -90,10 +90,10 @@ Every release ships clean universal tarballs for **Linux x86_64** and **Linux AR
 
 ```bash
 # Option A: One-line installer (auto-detects Linux x86_64 / ARM64 or macOS)
-curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/polychroms/liquid-rust/main/liquid-rust-install.sh | bash
 
 # Option B: Manual tarball download & install (x86_64 shown; use liquid-rust-linux-aarch64.tar.gz for ARM64)
-curl -LO https://github.com/rappar222/liquid-rust/releases/latest/download/liquid-rust-linux-x86_64.tar.gz
+curl -LO https://github.com/polychroms/liquid-rust/releases/latest/download/liquid-rust-linux-x86_64.tar.gz
 tar -xzf liquid-rust-linux-x86_64.tar.gz
 ./liquid-rust-install.sh
 ```
@@ -104,7 +104,7 @@ tar -xzf liquid-rust-linux-x86_64.tar.gz
 
 ```bash
 # Automatic install via liquid-rust-install.sh (recommended — avoids browser quarantine):
-curl -fsSL https://raw.githubusercontent.com/rappar222/liquid-rust/main/liquid-rust-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/polychroms/liquid-rust/main/liquid-rust-install.sh | bash
 
 # Or download & extract manually:
 # Apple Silicon (M1–M4): liquid-rust-macos-arm64.tar.gz
@@ -118,7 +118,7 @@ xattr -dr com.apple.quarantine ./liquid-rust* && ./liquid-rust
 
 ### 🪟 Windows (`x86_64`)
 
-Download `liquid-rust-windows-x86_64.zip` from the [latest release (v0.4.5)](https://github.com/rappar222/liquid-rust/releases/latest), extract `liquid-rust.exe`, and launch directly or run from PowerShell/CMD.
+Download `liquid-rust-windows-x86_64.zip` from the [latest release (v1.0.0)](https://github.com/polychroms/liquid-rust/releases/latest), extract `liquid-rust.exe`, and launch directly or run from PowerShell/CMD.
 
 ---
 
@@ -131,7 +131,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 Clone the repository and run in release mode for maximum simulation performance:
 ```bash
-git clone https://github.com/rappar222/liquid-rust.git
+git clone https://github.com/polychroms/liquid-rust.git
 cd liquid-rust
 cargo run --release
 ```

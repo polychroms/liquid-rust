@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-REPO="rappar222/liquid-rust"
+REPO="polychroms/liquid-rust"
 
 BOLD="\033[1m"
 GREEN="\033[32m"

@@ -35,9 +35,9 @@ import java.util.Locale;
  */
 public final class AppUpdater {
 
-    public static final String GITHUB_REPO = "rappar222/liquid-rust";
+    public static final String GITHUB_REPO = "polychroms/liquid-rust";
     private static final String GITHUB_LATEST_API =
-        "https://api.github.com/repos/rappar222/liquid-rust/releases/latest";
+        "https://api.github.com/repos/polychroms/liquid-rust/releases/latest";
 
     private static final String PREFS_NAME = "liquid_updater_prefs";
     private static final String KEY_PENDING_RELAUNCH_TS = "pending_relaunch_ts";
@@ -115,7 +115,7 @@ public final class AppUpdater {
                 return pi.versionName;
             }
         } catch (Throwable ignored) {}
-        return "0.4.5";
+        return "1.0.0";
     }
 
     @SuppressWarnings("deprecation")

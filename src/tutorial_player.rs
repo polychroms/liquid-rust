@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-pub const TUTORIAL_WIDTH: usize = 854;
-pub const TUTORIAL_HEIGHT: usize = 480;
+pub const TUTORIAL_WIDTH: usize = 1920;
+pub const TUTORIAL_HEIGHT: usize = 1080;
 const TUTORIAL_FPS: f64 = 30.0;
 pub const TUTORIAL_DURATION_SECS: f64 = 64.0;
 pub const TUTORIAL_MP4_URL: &str = "https://fluids.polychroms.dev/media/liquid-rust-training.mp4";
@@ -26,7 +26,7 @@ pub enum TutorialStatus {
 
 struct SharedState {
     status: TutorialStatus,
-    latest_frame: Option<(u64, Vec<u8>)>,
+    latest_frame: Option<(u64, egui::ColorImage)>,
     pos_secs: f64,
 }
 
@@ -77,9 +77,8 @@ impl TutorialPlayer {
                 _ => None,
             }
         };
-        if let Some((id, rgb)) = frame_opt {
+        if let Some((id, img)) = frame_opt {
             self.uploaded_frame_id = id;
-            let img = egui::ColorImage::from_rgb([TUTORIAL_WIDTH, TUTORIAL_HEIGHT], &rgb);
             if let Some(tex) = &mut self.texture {
                 tex.set(img, egui::TextureOptions::LINEAR);
             } else {
@@ -248,8 +247,6 @@ fn run_playback_worker(
         &format!("{:.3}", start_secs),
         "-i",
         mp4_str,
-        "-vf",
-        &format!("scale={}:{}", TUTORIAL_WIDTH, TUTORIAL_HEIGHT),
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -322,10 +319,11 @@ fn run_playback_worker(
 
         let cur_pos = (start_secs + (frame_idx as f64 / TUTORIAL_FPS)).min(TUTORIAL_DURATION_SECS);
         let fid = frame_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let img = egui::ColorImage::from_rgb([TUTORIAL_WIDTH, TUTORIAL_HEIGHT], &buf);
         {
             let mut s = shared.lock().unwrap();
             s.status = TutorialStatus::Playing;
-            s.latest_frame = Some((fid, buf.clone()));
+            s.latest_frame = Some((fid, img));
             s.pos_secs = cur_pos;
         }
         ctx.request_repaint();
