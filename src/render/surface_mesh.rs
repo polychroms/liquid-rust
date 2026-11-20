@@ -11,15 +11,21 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderMode {
     Particles,
+    ScreenSpaceFluid,
     SurfaceMesh,
 }
 
 impl RenderMode {
-    pub const ALL: &'static [RenderMode] = &[RenderMode::Particles, RenderMode::SurfaceMesh];
+    pub const ALL: &'static [RenderMode] = &[
+        RenderMode::Particles,
+        RenderMode::ScreenSpaceFluid,
+        RenderMode::SurfaceMesh,
+    ];
 
     pub fn name(&self) -> &'static str {
         match self {
             RenderMode::Particles => "SPH Spheres (Particles)",
+            RenderMode::ScreenSpaceFluid => "Fast Liquid (SSFR)",
             RenderMode::SurfaceMesh => "3D Surface Mesh (Isosurface)",
         }
     }
@@ -27,12 +33,14 @@ impl RenderMode {
     pub fn slug(&self) -> &'static str {
         match self {
             RenderMode::Particles => "particles",
+            RenderMode::ScreenSpaceFluid => "ssfr",
             RenderMode::SurfaceMesh => "mesh",
         }
     }
 
     pub fn from_slug(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
+            "ssfr" | "liquid" | "fast-liquid" | "screen-space" => RenderMode::ScreenSpaceFluid,
             "mesh" | "surface" | "surface-mesh" | "isosurface" | "marching-cubes" => {
                 RenderMode::SurfaceMesh
             }
@@ -607,6 +615,7 @@ pub struct SurfaceMeshConfig {
     pub max_grid_cells: f32,        // Max marching-cubes cells along longest axis (default 260)
     pub min_voxel_size: f32,        // Minimum marching-cubes voxel size in meters (default 0.0025)
     pub max_smoothing_passes: usize,// Upper bound for Taubin smoothing iterations (default 10)
+    pub ssfr_fusion: f32,           // Screen-Space Fluid fusion blend [0.0 = balls .. 1.0 = glassy liquid]
 }
 
 impl Default for SurfaceMeshConfig {
@@ -643,6 +652,7 @@ impl Default for SurfaceMeshConfig {
             max_grid_cells: 260.0,
             min_voxel_size: 0.0025,
             max_smoothing_passes: 10,
+            ssfr_fusion: 1.0,
         };
         FluidMaterialPreset::ClearWater.apply(&mut cfg);
         cfg

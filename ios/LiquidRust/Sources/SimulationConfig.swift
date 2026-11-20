@@ -99,6 +99,8 @@ final class SimulationConfig: ObservableObject {
     @Published var obstacleR: Float = 0.20
 
     // Optical Shading & Procedural Texture
+    @Published var liquidSurface: Bool = true
+    @Published var liquidFusion: Float = 1.0
     @Published var materialIndex: Int = 0
     @Published var colorMode: Int = 3 // 3: Optical Liquid, 0: Velocity, 1: Pressure, 2: Density
     @Published var colorMap: Int = 0  // 0: Ocean, 1: Turbo, 2: Viridis, 3: Magma

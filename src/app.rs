@@ -452,7 +452,7 @@ impl GuiOfflineRenderer {
                     }
                 }
             }
-            RenderMode::SurfaceMesh => match self {
+            RenderMode::SurfaceMesh | RenderMode::ScreenSpaceFluid => match self {
                 Self::Gpu {
                     renderer,
                     surface_field,
@@ -1503,7 +1503,10 @@ impl LiquidApp {
 
     pub fn effective_render_mode(&self) -> RenderMode {
         match self.render_appearance {
-            RenderAppearance::MatchViewport => self.render_mode,
+            RenderAppearance::MatchViewport => match self.render_mode {
+                RenderMode::ScreenSpaceFluid => RenderMode::SurfaceMesh,
+                other => other,
+            },
             RenderAppearance::SmoothLiquid => RenderMode::SurfaceMesh,
             RenderAppearance::ParticleSpheres => RenderMode::Particles,
         }
@@ -2954,7 +2957,7 @@ impl LiquidApp {
 
                 let cur_pts = render_solver.particles.len();
                 let baked_frame = match render_mode {
-                    RenderMode::SurfaceMesh => {
+                    RenderMode::SurfaceMesh | RenderMode::ScreenSpaceFluid => {
                         let mesh = if let Some(ref mut sf) = gpu_surface_opt {
                             SurfaceMesh::from_particles_with_gpu(
                                 &render_solver.particles,
@@ -3049,7 +3052,7 @@ impl LiquidApp {
                                     c[0] as f32 / 255.0,
                                     c[1] as f32 / 255.0,
                                     c[2] as f32 / 255.0,
-                                    1.0,
+                                    (p.velocity.length() / 2.8).clamp(0.0, 1.0),
                                 ],
                             });
                             snaps.push(CompactParticleSnap {
@@ -5615,14 +5618,14 @@ impl LiquidApp {
     }
 
     fn draw_surface_tab(&mut self, ui: &mut egui::Ui) {
-        // 1. Primary Render Mode Selector (Particles vs Surface Mesh)
+        // 1. Primary Render Mode Selector (Particles vs Fast SSFR Liquid vs 3D Surface Mesh)
         Self::section_card(ui, "Fluid Representation", |ui| {
             ui.horizontal(|ui| {
-                let w = (ui.available_width() - 6.0) * 0.5;
+                let w = ((ui.available_width() - 12.0) / 3.0).max(76.0);
                 if Self::icon_button(
                     ui,
                     UiIcon::Spheres,
-                    "SPH Spheres",
+                    "Spheres",
                     self.render_mode == RenderMode::Particles,
                     Some(egui::vec2(w, 28.0)),
                 )
@@ -5632,8 +5635,20 @@ impl LiquidApp {
                 }
                 if Self::icon_button(
                     ui,
+                    UiIcon::Wave,
+                    "Liquid",
+                    self.render_mode == RenderMode::ScreenSpaceFluid,
+                    Some(egui::vec2(w, 28.0)),
+                )
+                .on_hover_text("Fast Screen-Space Fluid (SSFR) with translucent refraction & Beer-Lambert depth")
+                .clicked()
+                {
+                    self.render_mode = RenderMode::ScreenSpaceFluid;
+                }
+                if Self::icon_button(
+                    ui,
                     UiIcon::Mesh,
-                    "3D Surface Mesh",
+                    "3D Mesh",
                     self.render_mode == RenderMode::SurfaceMesh,
                     Some(egui::vec2(w, 28.0)),
                 )
@@ -5647,10 +5662,31 @@ impl LiquidApp {
                 RenderMode::Particles => {
                     "Instanced analytical ray-sphere impostors with Fresnel rim lighting & whitewater foam."
                 }
+                RenderMode::ScreenSpaceFluid => {
+                    "High-FPS Screen-Space Fluid (SSFR) with bilateral depth smoothing, background refraction & Beer-Lambert absorption."
+                }
                 RenderMode::SurfaceMesh => {
-                    "Continuous Marching Cubes isosurface with Beer-Lambert absorption, textures & PBR light."
+                    "Watertight 3D Marching Cubes isosurface with real background refraction, exact thickness Beer-Lambert & PBR light."
                 }
             });
+            if self.render_mode == RenderMode::ScreenSpaceFluid {
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Slider::new(&mut self.mesh_config.ssfr_fusion, 0.0..=1.0)
+                        .text("Liquid Fusion")
+                        .custom_formatter(|v, _| {
+                            let pct = (v * 100.0).round() as i32;
+                            if pct <= 0 {
+                                "0% (Balls)".to_string()
+                            } else if pct < 90 {
+                                format!("{}% (Coated)", pct)
+                            } else {
+                                format!("{}% (Liquid)", pct)
+                            }
+                        }),
+                )
+                .on_hover_text("Blends smoothly from discrete spheres (0%) through meniscus-coated droplets to glassy continuous liquid (100%)");
+            }
         });
 
         ui.add_space(6.0);
@@ -5857,55 +5893,57 @@ impl LiquidApp {
                     });
                 });
 
-            egui::CollapsingHeader::new("Advanced Isosurface Meshing Grid")
-                .default_open(false)
-                .show(ui, |ui| {
-                    Self::section_card(ui, "Marching Cubes Reconstruction", |ui| {
-                        let mut geom_changed = false;
-                        geom_changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.mesh_config.voxel_scale, 0.40..=1.35)
-                                    .text("Voxel Scale"),
-                            )
-                            .on_hover_text("Smaller = finer surface triangles; larger = faster preview")
-                            .changed();
-                        geom_changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.mesh_config.iso_value, 0.16..=0.75)
-                                    .text("Iso Threshold"),
-                            )
-                            .changed();
-                        geom_changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.mesh_config.smoothing_passes, 0..=10)
-                                    .text("Taubin Smooth"),
-                            )
-                            .changed();
-                        geom_changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.mesh_config.kernel_scale, 0.7..=1.6)
-                                    .text("Kernel Support"),
-                            )
-                            .changed();
+            if self.render_mode == RenderMode::SurfaceMesh {
+                egui::CollapsingHeader::new("Advanced Isosurface Meshing Grid")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        Self::section_card(ui, "Marching Cubes Reconstruction", |ui| {
+                            let mut geom_changed = false;
+                            geom_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.mesh_config.voxel_scale, 0.40..=1.35)
+                                        .text("Voxel Scale"),
+                                )
+                                .on_hover_text("Smaller = finer surface triangles; larger = faster preview")
+                                .changed();
+                            geom_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.mesh_config.iso_value, 0.16..=0.75)
+                                        .text("Iso Threshold"),
+                                )
+                                .changed();
+                            geom_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.mesh_config.smoothing_passes, 0..=10)
+                                        .text("Taubin Smooth"),
+                                )
+                                .changed();
+                            geom_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.mesh_config.kernel_scale, 0.7..=1.6)
+                                        .text("Kernel Support"),
+                                )
+                                .changed();
 
-                        if geom_changed {
-                            self.mesh_dirty = true;
-                        }
-
-                        ui.horizontal(|ui| {
-                            ui.weak(format!(
-                                "Mesh: {} tris ({:.1} ms)",
-                                self.cached_surface_mesh.triangle_count(),
-                                self.last_mesh_time_ms
-                            ));
-                            if Self::icon_button(ui, UiIcon::Save, "Export .OBJ", false, None)
-                                .clicked()
-                            {
-                                self.export_current_surface_obj();
+                            if geom_changed {
+                                self.mesh_dirty = true;
                             }
+
+                            ui.horizontal(|ui| {
+                                ui.weak(format!(
+                                    "Mesh: {} tris ({:.1} ms)",
+                                    self.cached_surface_mesh.triangle_count(),
+                                    self.last_mesh_time_ms
+                                ));
+                                if Self::icon_button(ui, UiIcon::Save, "Export .OBJ", false, None)
+                                    .clicked()
+                                {
+                                    self.export_current_surface_obj();
+                                }
+                            });
                         });
                     });
-                });
+            }
         }
 
         ui.add_space(6.0);
@@ -6688,7 +6726,7 @@ impl LiquidApp {
         // 3. Primary Start Button, Plain-English Progress + ETA & End Result Actions
         Self::section_card(ui, "3. Start Render & View Result", |ui| {
             let look_name = match self.effective_render_mode() {
-                RenderMode::SurfaceMesh => "Smooth Liquid",
+                RenderMode::SurfaceMesh | RenderMode::ScreenSpaceFluid => "Smooth Liquid",
                 RenderMode::Particles => "Droplets",
             };
 
@@ -7576,7 +7614,8 @@ impl eframe::App for LiquidApp {
             }
             if key_mesh {
                 self.render_mode = match self.render_mode {
-                    RenderMode::Particles => {
+                    RenderMode::Particles => RenderMode::ScreenSpaceFluid,
+                    RenderMode::ScreenSpaceFluid => {
                         self.mesh_dirty = true;
                         RenderMode::SurfaceMesh
                     }
@@ -7811,6 +7850,18 @@ impl eframe::App for LiquidApp {
                     .clicked()
                     {
                         self.render_mode = RenderMode::Particles;
+                    }
+                    if Self::icon_button(
+                        ui,
+                        UiIcon::Wave,
+                        "Liquid",
+                        self.render_mode == RenderMode::ScreenSpaceFluid,
+                        None,
+                    )
+                    .on_hover_text("Fast Screen-Space Fluid (SSFR) refractive liquid (M)")
+                    .clicked()
+                    {
+                        self.render_mode = RenderMode::ScreenSpaceFluid;
                     }
                     if Self::icon_button(
                         ui,
@@ -8549,7 +8600,8 @@ impl eframe::App for LiquidApp {
                                                             c[0] as f32 / 255.0,
                                                             c[1] as f32 / 255.0,
                                                             c[2] as f32 / 255.0,
-                                                            1.0,
+                                                            (Vec3::from(s.vel).length() / 2.8)
+                                                                .clamp(0.0, 1.0),
                                                         ],
                                                     }
                                                 })
@@ -8568,6 +8620,9 @@ impl eframe::App for LiquidApp {
                                     };
 
                                     let lit_spheres = self.lit_spheres;
+                                    let is_ssfr_baked =
+                                        self.render_mode == RenderMode::ScreenSpaceFluid;
+                                    let mesh_cfg_baked = self.mesh_config.clone();
                                     let callback =
                                         egui_glow::CallbackFn::new(move |info, painter| {
                                             if let Ok(mut guard) = renderer_arc.lock() {
@@ -8592,26 +8647,49 @@ impl eframe::App for LiquidApp {
                                                             );
                                                         }
 
-                                                        renderer.render_cached(
-                                                            gl,
-                                                            view,
-                                                            proj,
-                                                            [
-                                                                vp.width_px as f32,
-                                                                vp.height_px as f32,
-                                                            ],
-                                                            point_radius,
-                                                            fov_y,
-                                                            &verts_arc,
-                                                            lit_spheres,
-                                                            &bscene.chamber,
-                                                            bscene.bounds,
-                                                            &bscene.colliders,
-                                                            &bscene.faucets,
-                                                            &bscene.drains,
-                                                            bscene.is_2d,
-                                                            part_cache_tag,
-                                                        );
+                                                        if is_ssfr_baked {
+                                                            renderer.render_ssfr_cached(
+                                                                gl,
+                                                                view,
+                                                                proj,
+                                                                [
+                                                                    vp.width_px as f32,
+                                                                    vp.height_px as f32,
+                                                                ],
+                                                                point_radius,
+                                                                fov_y,
+                                                                &verts_arc,
+                                                                &mesh_cfg_baked,
+                                                                &bscene.chamber,
+                                                                bscene.bounds,
+                                                                &bscene.colliders,
+                                                                &bscene.faucets,
+                                                                &bscene.drains,
+                                                                bscene.is_2d,
+                                                                part_cache_tag,
+                                                            );
+                                                        } else {
+                                                            renderer.render_cached(
+                                                                gl,
+                                                                view,
+                                                                proj,
+                                                                [
+                                                                    vp.width_px as f32,
+                                                                    vp.height_px as f32,
+                                                                ],
+                                                                point_radius,
+                                                                fov_y,
+                                                                &verts_arc,
+                                                                lit_spheres,
+                                                                &bscene.chamber,
+                                                                bscene.bounds,
+                                                                &bscene.colliders,
+                                                                &bscene.faucets,
+                                                                &bscene.drains,
+                                                                bscene.is_2d,
+                                                                part_cache_tag,
+                                                            );
+                                                        }
 
                                                         unsafe {
                                                             gl.viewport(
@@ -9103,7 +9181,7 @@ impl eframe::App for LiquidApp {
                                     c[0] as f32 / 255.0,
                                     c[1] as f32 / 255.0,
                                     c[2] as f32 / 255.0,
-                                    1.0,
+                                    (p.velocity.length() / 2.8).clamp(0.0, 1.0),
                                 ],
                             })
                         }),
@@ -9114,6 +9192,8 @@ impl eframe::App for LiquidApp {
                     let lit_spheres = self.lit_spheres;
                     let particle_radius =
                         self.solver.config.particle_radius * self.display_size_factor;
+                    let is_ssfr = self.render_mode == RenderMode::ScreenSpaceFluid;
+                    let mesh_cfg_ssfr = self.mesh_config.clone();
 
                     let callback = egui_glow::CallbackFn::new(move |info, painter| {
                         if let Ok(mut guard) = renderer_arc.lock() {
@@ -9138,22 +9218,42 @@ impl eframe::App for LiquidApp {
                                         );
                                     }
 
-                                    renderer.render(
-                                        gl,
-                                        view,
-                                        proj,
-                                        [vp.width_px as f32, vp.height_px as f32],
-                                        particle_radius,
-                                        fov_y,
-                                        &particles_snapshot,
-                                        lit_spheres,
-                                        &chamber,
-                                        bounds,
-                                        &colliders,
-                                        &faucets,
-                                        &drains,
-                                        is_2d,
-                                    );
+                                    if is_ssfr {
+                                        renderer.render_ssfr_cached(
+                                            gl,
+                                            view,
+                                            proj,
+                                            [vp.width_px as f32, vp.height_px as f32],
+                                            particle_radius,
+                                            fov_y,
+                                            &particles_snapshot,
+                                            &mesh_cfg_ssfr,
+                                            &chamber,
+                                            bounds,
+                                            &colliders,
+                                            &faucets,
+                                            &drains,
+                                            is_2d,
+                                            0,
+                                        );
+                                    } else {
+                                        renderer.render(
+                                            gl,
+                                            view,
+                                            proj,
+                                            [vp.width_px as f32, vp.height_px as f32],
+                                            particle_radius,
+                                            fov_y,
+                                            &particles_snapshot,
+                                            lit_spheres,
+                                            &chamber,
+                                            bounds,
+                                            &colliders,
+                                            &faucets,
+                                            &drains,
+                                            is_2d,
+                                        );
+                                    }
 
                                     unsafe {
                                         gl.viewport(

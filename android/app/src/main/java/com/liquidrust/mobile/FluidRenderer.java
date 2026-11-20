@@ -68,6 +68,25 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
     private int uLineViewProj;
     private int uLineColor;
 
+    // 5-Pass Screen-Space Fluid Rendering (SSFR) + Translucent Refraction Pipeline
+    private boolean ssfrReady = false;
+    private int progSsfrBg, uBgTime, uBgWaterColor, uBgIs2D;
+    private int progSsfrDepth, uDepView, uDepProj, uDepRadius, uDepInvRho0, uDepColorMode, uDepFusion, uDepScale;
+    private int progSsfrThick, uThkView, uThkProj, uThkRadius, uThkInvRho0, uThkColorMode, uThkWeight;
+    private int progSsfrBlur, uBlurDepthTex, uBlurTexel, uBlurDir, uBlurFusion, uBlurStride, uBlurThresh;
+    private int progSsfrComp, uCompBgTex, uCompSmoothTex, uCompRawTex, uCompThickTex;
+    private int uCompTexel, uCompTanHalfFov, uCompAspect, uCompDepthScale, uCompFusion;
+    private int uCompShallow, uCompDeep, uCompOptics, uCompRefraction, uCompFoam;
+    private int uCompLightDir, uCompLitSpheres, uCompColorMode, uCompColorMap;
+
+    private int quadVao;
+    private int ssfrW = 0, ssfrH = 0, thickW = 0, thickH = 0;
+    private int bgFbo, bgTex;
+    private int depthFbo, depthTex, depthRb;
+    private int blurTempFbo, blurTempTex;
+    private int blurFinalFbo, blurFinalTex;
+    private int thickFbo, thickTex;
+
     private int particleVao;
     private int lineVao;
     private int lineVbo;
@@ -146,10 +165,74 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
         uLineViewProj = GLES30.glGetUniformLocation(progLine, "u_view_proj");
         uLineColor = GLES30.glGetUniformLocation(progLine, "u_line_color");
 
-        int[] vaos = new int[2];
-        GLES30.glGenVertexArrays(2, vaos, 0);
+        int[] vaos = new int[3];
+        GLES30.glGenVertexArrays(3, vaos, 0);
         particleVao = vaos[0];
         lineVao = vaos[1];
+        quadVao = vaos[2];
+
+        // Compile 5-pass SSFR + Translucent Refraction shaders (falls back cleanly if unavailable)
+        ssfrReady = false;
+        ssfrW = 0;
+        ssfrH = 0;
+        bgFbo = depthFbo = blurTempFbo = blurFinalFbo = thickFbo = 0;
+        bgTex = depthTex = blurTempTex = blurFinalTex = thickTex = depthRb = 0;
+        try {
+            progSsfrBg = ShaderUtils.buildRenderProgram(assets, "shaders/ssfr_quad.vert", "shaders/ssfr_bg.frag", null);
+            uBgTime = GLES30.glGetUniformLocation(progSsfrBg, "u_time");
+            uBgWaterColor = GLES30.glGetUniformLocation(progSsfrBg, "u_water_color");
+            uBgIs2D = GLES30.glGetUniformLocation(progSsfrBg, "u_is_2d");
+
+            progSsfrDepth = ShaderUtils.buildRenderProgram(assets, "shaders/ssfr_sprite.vert", "shaders/ssfr_depth.frag", null);
+            uDepView = GLES30.glGetUniformLocation(progSsfrDepth, "u_view");
+            uDepProj = GLES30.glGetUniformLocation(progSsfrDepth, "u_proj");
+            uDepRadius = GLES30.glGetUniformLocation(progSsfrDepth, "u_radius");
+            uDepInvRho0 = GLES30.glGetUniformLocation(progSsfrDepth, "u_inv_rho0");
+            uDepColorMode = GLES30.glGetUniformLocation(progSsfrDepth, "u_color_mode");
+            uDepFusion = GLES30.glGetUniformLocation(progSsfrDepth, "u_fusion");
+            uDepScale = GLES30.glGetUniformLocation(progSsfrDepth, "u_depth_scale");
+
+            progSsfrThick = ShaderUtils.buildRenderProgram(assets, "shaders/ssfr_sprite.vert", "shaders/ssfr_thick.frag", null);
+            uThkView = GLES30.glGetUniformLocation(progSsfrThick, "u_view");
+            uThkProj = GLES30.glGetUniformLocation(progSsfrThick, "u_proj");
+            uThkRadius = GLES30.glGetUniformLocation(progSsfrThick, "u_radius");
+            uThkInvRho0 = GLES30.glGetUniformLocation(progSsfrThick, "u_inv_rho0");
+            uThkColorMode = GLES30.glGetUniformLocation(progSsfrThick, "u_color_mode");
+            uThkWeight = GLES30.glGetUniformLocation(progSsfrThick, "u_thick_weight");
+
+            progSsfrBlur = ShaderUtils.buildRenderProgram(assets, "shaders/ssfr_quad.vert", "shaders/ssfr_blur.frag", null);
+            uBlurDepthTex = GLES30.glGetUniformLocation(progSsfrBlur, "t_depth");
+            uBlurTexel = GLES30.glGetUniformLocation(progSsfrBlur, "u_texel_size");
+            uBlurDir = GLES30.glGetUniformLocation(progSsfrBlur, "u_direction");
+            uBlurFusion = GLES30.glGetUniformLocation(progSsfrBlur, "u_fusion");
+            uBlurStride = GLES30.glGetUniformLocation(progSsfrBlur, "u_tap_stride");
+            uBlurThresh = GLES30.glGetUniformLocation(progSsfrBlur, "u_depth_threshold");
+
+            progSsfrComp = ShaderUtils.buildRenderProgram(assets, "shaders/ssfr_quad.vert", "shaders/ssfr_composite.frag", null);
+            uCompBgTex = GLES30.glGetUniformLocation(progSsfrComp, "t_bg");
+            uCompSmoothTex = GLES30.glGetUniformLocation(progSsfrComp, "t_smooth_depth");
+            uCompRawTex = GLES30.glGetUniformLocation(progSsfrComp, "t_raw_depth");
+            uCompThickTex = GLES30.glGetUniformLocation(progSsfrComp, "t_thickness");
+            uCompTexel = GLES30.glGetUniformLocation(progSsfrComp, "u_texel_size");
+            uCompTanHalfFov = GLES30.glGetUniformLocation(progSsfrComp, "u_tan_half_fov");
+            uCompAspect = GLES30.glGetUniformLocation(progSsfrComp, "u_aspect");
+            uCompDepthScale = GLES30.glGetUniformLocation(progSsfrComp, "u_depth_scale");
+            uCompFusion = GLES30.glGetUniformLocation(progSsfrComp, "u_fusion");
+            uCompShallow = GLES30.glGetUniformLocation(progSsfrComp, "u_shallow_color");
+            uCompDeep = GLES30.glGetUniformLocation(progSsfrComp, "u_deep_color");
+            uCompOptics = GLES30.glGetUniformLocation(progSsfrComp, "u_optics");
+            uCompRefraction = GLES30.glGetUniformLocation(progSsfrComp, "u_refraction");
+            uCompFoam = GLES30.glGetUniformLocation(progSsfrComp, "u_foam_amount");
+            uCompLightDir = GLES30.glGetUniformLocation(progSsfrComp, "u_light_dir");
+            uCompLitSpheres = GLES30.glGetUniformLocation(progSsfrComp, "u_lit_spheres");
+            uCompColorMode = GLES30.glGetUniformLocation(progSsfrComp, "u_color_mode");
+            uCompColorMap = GLES30.glGetUniformLocation(progSsfrComp, "u_color_map");
+
+            ssfrReady = true;
+        } catch (Throwable t) {
+            Log.w(TAG, "SSFR shader init failed; using fast particle renderer", t);
+            ssfrReady = false;
+        }
 
         int[] vbos = new int[1];
         GLES30.glGenBuffers(1, vbos, 0);
@@ -257,18 +340,24 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
             animTime += Math.min(frameDt, 1.0f / 45.0f) * cfg.simSpeed;
         }
 
-        GLES30.glViewport(0, 0, vpWidth, vpHeight);
-        GLES30.glDepthMask(true);
-        // Material 3 Dark Neutral Slate (#0E141B)
-        GLES30.glClearColor(14.0f / 255.0f, 20.0f / 255.0f, 27.0f / 255.0f, 1.0f);
-        GLES30.glClearDepthf(1.0f);
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT | GLES30.GL_DEPTH_BUFFER_BIT);
-
         boolean active2D = useGpuCompute ? gpuSolver.is2D() : cpuSolver.is2D();
         camera.updateMatrices(active2D);
 
-        drawWireframes(active2D);
-        drawParticles(active2D);
+        boolean useSsfr = ssfrReady && cfg.liquidSurface && cfg.liquidFusion > 0.005f && getParticleCount() > 0;
+        if (useSsfr && ensureSsfrTargets()) {
+            drawSsfr(active2D);
+        } else {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
+            GLES30.glViewport(0, 0, vpWidth, vpHeight);
+            GLES30.glDepthMask(true);
+            // Material 3 Dark Neutral Slate (#0E141B)
+            GLES30.glClearColor(14.0f / 255.0f, 20.0f / 255.0f, 27.0f / 255.0f, 1.0f);
+            GLES30.glClearDepthf(1.0f);
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT | GLES30.GL_DEPTH_BUFFER_BIT);
+
+            drawWireframes(active2D);
+            drawParticles(active2D);
+        }
 
         frameCounter++;
         long elapsedNs = nowNs - telemetryWindowStartNs;
@@ -444,5 +533,277 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
 
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0);
         GLES30.glBindVertexArray(0);
+    }
+
+    private void deleteSsfrTargets() {
+        int[] fbos = { bgFbo, depthFbo, blurTempFbo, blurFinalFbo, thickFbo };
+        GLES30.glDeleteFramebuffers(fbos.length, fbos, 0);
+        int[] texs = { bgTex, depthTex, blurTempTex, blurFinalTex, thickTex };
+        GLES30.glDeleteTextures(texs.length, texs, 0);
+        if (depthRb != 0) {
+            int[] rbs = { depthRb };
+            GLES30.glDeleteRenderbuffers(1, rbs, 0);
+        }
+        bgFbo = depthFbo = blurTempFbo = blurFinalFbo = thickFbo = 0;
+        bgTex = depthTex = blurTempTex = blurFinalTex = thickTex = depthRb = 0;
+        ssfrW = 0;
+        ssfrH = 0;
+    }
+
+    private int[] createSsfrTarget(int w, int h, boolean withDepth, boolean nearest) {
+        int[] tex = new int[1];
+        GLES30.glGenTextures(1, tex, 0);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex[0]);
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0,
+                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null);
+        int filt = nearest ? GLES30.GL_NEAREST : GLES30.GL_LINEAR;
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, filt);
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, filt);
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE);
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE);
+
+        int[] fbo = new int[1];
+        GLES30.glGenFramebuffers(1, fbo, 0);
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0]);
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D, tex[0], 0);
+
+        int rbId = 0;
+        if (withDepth) {
+            int[] rb = new int[1];
+            GLES30.glGenRenderbuffers(1, rb, 0);
+            rbId = rb[0];
+            GLES30.glBindRenderbuffer(GLES30.GL_RENDERBUFFER, rbId);
+            GLES30.glRenderbufferStorage(GLES30.GL_RENDERBUFFER, GLES30.GL_DEPTH_COMPONENT24, w, h);
+            GLES30.glFramebufferRenderbuffer(GLES30.GL_FRAMEBUFFER, GLES30.GL_DEPTH_ATTACHMENT,
+                    GLES30.GL_RENDERBUFFER, rbId);
+        }
+
+        int status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER);
+        return new int[] { fbo[0], tex[0], rbId, status == GLES30.GL_FRAMEBUFFER_COMPLETE ? 1 : 0 };
+    }
+
+    private boolean ensureSsfrTargets() {
+        // 0.75x resolution on mobile GPUs cuts fill-rate by ~44% while bilateral blur keeps edges silky crisp
+        int targetW = Math.max(4, Math.round(vpWidth * 0.75f));
+        int targetH = Math.max(4, Math.round(vpHeight * 0.75f));
+        if (ssfrW == targetW && ssfrH == targetH && bgFbo != 0) {
+            return true;
+        }
+        if (bgFbo != 0) {
+            deleteSsfrTargets();
+        }
+        int tw = Math.max(2, targetW >> 1);
+        int th = Math.max(2, targetH >> 1);
+
+        int[] bg = createSsfrTarget(targetW, targetH, false, false);
+        int[] dep = createSsfrTarget(targetW, targetH, true, true);
+        int[] b1 = createSsfrTarget(targetW, targetH, false, true);
+        int[] b2 = createSsfrTarget(targetW, targetH, false, true);
+        int[] tk = createSsfrTarget(tw, th, false, false);
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0);
+        GLES30.glBindRenderbuffer(GLES30.GL_RENDERBUFFER, 0);
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
+
+        bgFbo = bg[0]; bgTex = bg[1];
+        depthFbo = dep[0]; depthTex = dep[1]; depthRb = dep[2];
+        blurTempFbo = b1[0]; blurTempTex = b1[1];
+        blurFinalFbo = b2[0]; blurFinalTex = b2[1];
+        thickFbo = tk[0]; thickTex = tk[1];
+
+        boolean ok = (bg[3] == 1 && dep[3] == 1 && b1[3] == 1 && b2[3] == 1 && tk[3] == 1);
+        if (!ok) {
+            Log.w(TAG, "SSFR FBO allocation incomplete; falling back to direct particles");
+            deleteSsfrTargets();
+            ssfrReady = false;
+            return false;
+        }
+
+        ssfrW = targetW;
+        ssfrH = targetH;
+        thickW = tw;
+        thickH = th;
+        return true;
+    }
+
+    private void drawSsfr(boolean active2D) {
+        int n = getParticleCount();
+        if (n <= 0) return;
+
+        int posBufId = useGpuCompute ? gpuSolver.getPosBufferId() : cpuSolver.getPosBufferId();
+        int velBufId = useGpuCompute ? gpuSolver.getVelBufferId() : cpuSolver.getVelBufferId();
+        float rawRadius = useGpuCompute ? gpuSolver.getParticleRadius() : cpuSolver.getParticleRadius();
+        float invRho0 = useGpuCompute ? gpuSolver.getInvRestDensity() : cpuSolver.getInvRestDensity();
+
+        float fusion = Math.max(0.0f, Math.min(1.0f, cfg.liquidFusion));
+        float depthScale = 16.0f;
+        float tanHalfFov = camera.getTanHalfFov();
+        float aspect = (float) vpWidth / (float) Math.max(1, vpHeight);
+        float camDist = Math.max(0.8f, camera.getDistance());
+
+        // Slightly larger billboard radii as fusion increases bridge inter-particle gaps smoothly
+        float baseRad = rawRadius * (active2D ? 1.48f : 1.44f);
+        float fusedRad = baseRad * (1.0f + fusion * 0.46f);
+        float thickRad = fusedRad * (1.0f + fusion * 0.28f);
+
+        // Pass A: Studio Background + Animated Caustic Floor + Tank/Obstacle Wireframes
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bgFbo);
+        GLES30.glViewport(0, 0, ssfrW, ssfrH);
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST);
+        GLES30.glDepthMask(false);
+        GLES30.glDisable(GLES30.GL_BLEND);
+
+        GLES30.glUseProgram(progSsfrBg);
+        GLES30.glUniform1f(uBgTime, animTime);
+        GLES30.glUniform3f(uBgWaterColor, cfg.shallowR, cfg.shallowG, cfg.shallowB);
+        GLES30.glUniform1i(uBgIs2D, active2D ? 1 : 0);
+        GLES30.glBindVertexArray(quadVao);
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
+        GLES30.glBindVertexArray(0);
+
+        drawWireframes(active2D);
+
+        // Bind zero-copy GPU/CPU particle VAO once for both Pass B and Pass C
+        GLES30.glBindVertexArray(particleVao);
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, posBufId);
+        GLES30.glVertexAttribPointer(0, 4, GLES30.GL_FLOAT, false, 16, 0);
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, velBufId);
+        GLES30.glVertexAttribPointer(1, 4, GLES30.GL_FLOAT, false, 16, 0);
+
+        // Pass B: Analytical Eye-Space Sphere Depth (with view-Z flattening & RGB24 packing)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, depthFbo);
+        GLES30.glViewport(0, 0, ssfrW, ssfrH);
+        GLES30.glClearColor(0f, 0f, 0f, 0f);
+        GLES30.glClearDepthf(1.0f);
+        GLES30.glDepthMask(true);
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT | GLES30.GL_DEPTH_BUFFER_BIT);
+        GLES30.glDisable(GLES30.GL_BLEND);
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST);
+        GLES30.glDepthFunc(GLES30.GL_LEQUAL);
+
+        GLES30.glUseProgram(progSsfrDepth);
+        GLES30.glUniformMatrix4fv(uDepView, 1, false, camera.viewMatrix, 0);
+        GLES30.glUniformMatrix4fv(uDepProj, 1, false, camera.projMatrix, 0);
+        GLES30.glUniform1f(uDepRadius, fusedRad);
+        GLES30.glUniform1f(uDepInvRho0, invRho0);
+        GLES30.glUniform1i(uDepColorMode, cfg.colorMode);
+        GLES30.glUniform1f(uDepFusion, fusion);
+        GLES30.glUniform1f(uDepScale, depthScale);
+        GLES30.glDrawArraysInstanced(GLES30.GL_TRIANGLE_STRIP, 0, 4, n);
+
+        // Pass C: Half-Resolution Additive Optical Thickness + Speed/Metric Splatting
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, thickFbo);
+        GLES30.glViewport(0, 0, thickW, thickH);
+        GLES30.glClearColor(0f, 0f, 0f, 0f);
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT);
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST);
+        GLES30.glDepthMask(false);
+        GLES30.glEnable(GLES30.GL_BLEND);
+        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD);
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE);
+
+        float thickWeight = active2D
+            ? 0.14f
+            : Math.max(0.014f, Math.min(0.075f, 1.5f / (float) Math.sqrt(Math.max(n, 80))));
+
+        GLES30.glUseProgram(progSsfrThick);
+        GLES30.glUniformMatrix4fv(uThkView, 1, false, camera.viewMatrix, 0);
+        GLES30.glUniformMatrix4fv(uThkProj, 1, false, camera.projMatrix, 0);
+        GLES30.glUniform1f(uThkRadius, thickRad);
+        GLES30.glUniform1f(uThkInvRho0, invRho0);
+        GLES30.glUniform1i(uThkColorMode, cfg.colorMode);
+        GLES30.glUniform1f(uThkWeight, thickWeight);
+        GLES30.glDrawArraysInstanced(GLES30.GL_TRIANGLE_STRIP, 0, 4, n);
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0);
+
+        // Pass D1..D4: Two-Iteration Separable À-Trous Edge-Preserving Bilateral Depth Blur
+        GLES30.glDisable(GLES30.GL_BLEND);
+        GLES30.glUseProgram(progSsfrBlur);
+        float wideStride = Math.max(2.0f, Math.min(4.0f,
+            Math.round((ssfrH * fusedRad) / (camDist * tanHalfFov * 9.0f))));
+        float depthThresh = (rawRadius * (3.2f + 9.0f * fusion)) / depthScale;
+
+        GLES30.glUniform1i(uBlurDepthTex, 0);
+        GLES30.glUniform2f(uBlurTexel, 1.0f / ssfrW, 1.0f / ssfrH);
+        GLES30.glUniform1f(uBlurFusion, fusion);
+        GLES30.glUniform1f(uBlurStride, 1.0f);
+        GLES30.glUniform1f(uBlurThresh, depthThresh);
+
+        GLES30.glBindVertexArray(quadVao);
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
+
+        // Iter 1: 1px consecutive horizontal + vertical
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, blurTempFbo);
+        GLES30.glViewport(0, 0, ssfrW, ssfrH);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTex);
+        GLES30.glUniform2f(uBlurDir, 1.0f, 0.0f);
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, blurFinalFbo);
+        GLES30.glViewport(0, 0, ssfrW, ssfrH);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blurTempTex);
+        GLES30.glUniform2f(uBlurDir, 0.0f, 1.0f);
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
+
+        if (fusion > 0.08f) {
+            GLES30.glUniform1f(uBlurStride, wideStride);
+
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, blurTempFbo);
+            GLES30.glViewport(0, 0, ssfrW, ssfrH);
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blurFinalTex);
+            GLES30.glUniform2f(uBlurDir, 1.0f, 0.0f);
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
+
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, blurFinalFbo);
+            GLES30.glViewport(0, 0, ssfrW, ssfrH);
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blurTempTex);
+            GLES30.glUniform2f(uBlurDir, 0.0f, 1.0f);
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
+        }
+
+        // Pass E: Fullscreen Chromatic Refractive + Beer-Lambert Liquid Composite to Screen
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
+        GLES30.glViewport(0, 0, vpWidth, vpHeight);
+        GLES30.glUseProgram(progSsfrComp);
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bgTex);
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, blurFinalTex);
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTex);
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, thickTex);
+
+        GLES30.glUniform1i(uCompBgTex, 0);
+        GLES30.glUniform1i(uCompSmoothTex, 1);
+        GLES30.glUniform1i(uCompRawTex, 2);
+        GLES30.glUniform1i(uCompThickTex, 3);
+        GLES30.glUniform2f(uCompTexel, 1.0f / ssfrW, 1.0f / ssfrH);
+        GLES30.glUniform1f(uCompTanHalfFov, tanHalfFov);
+        GLES30.glUniform1f(uCompAspect, aspect);
+        GLES30.glUniform1f(uCompDepthScale, depthScale);
+        GLES30.glUniform1f(uCompFusion, fusion);
+        GLES30.glUniform3f(uCompShallow, cfg.shallowR, cfg.shallowG, cfg.shallowB);
+        GLES30.glUniform3f(uCompDeep, cfg.deepR, cfg.deepG, cfg.deepB);
+        GLES30.glUniform4f(uCompOptics, cfg.ior, cfg.roughness, cfg.specular, cfg.metallic);
+        GLES30.glUniform1f(uCompRefraction, cfg.refraction);
+        GLES30.glUniform1f(uCompFoam, cfg.foamAmount);
+        GLES30.glUniform3f(uCompLightDir, lightX, lightY, lightZ);
+        GLES30.glUniform1i(uCompLitSpheres, cfg.litSpheres ? 1 : 0);
+        GLES30.glUniform1i(uCompColorMode, cfg.colorMode);
+        GLES30.glUniform1i(uCompColorMap, cfg.colorMap);
+
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
+
+        // Clean state restore
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0);
+        GLES30.glBindVertexArray(0);
+        GLES30.glUseProgram(0);
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST);
+        GLES30.glDepthMask(true);
     }
 }

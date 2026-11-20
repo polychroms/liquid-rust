@@ -35,6 +35,19 @@ private struct RenderUniformsGPU {
     var line_color:   SIMD4<Float>
 }
 
+private struct SsfrUniformsGPU {
+    var view:      simd_float4x4
+    var proj:      simd_float4x4
+    var params0:   SIMD4<Float>
+    var params1:   SIMD4<Float>
+    var params2:   SIMD4<Float>
+    var shallow:   SIMD4<Float>
+    var deep:      SIMD4<Float>
+    var optics:    SIMD4<Float>
+    var light_inv: SIMD4<Float>
+    var modes:     SIMD4<Int32>
+}
+
 // Interactive Metal Touch View forwarding multi-touch gestures & 120Hz ProMotion
 final class InteractiveMTKView: MTKView {
     weak var engine: MetalFluidEngine?
@@ -212,8 +225,23 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
     private var pipeParticle2D: MTLRenderPipelineState?
     private var pipeParticle3D: MTLRenderPipelineState?
     private var pipeLine: MTLRenderPipelineState?
+    private var pipeSsfrBg: MTLRenderPipelineState?
+    private var pipeSsfrDepth: MTLRenderPipelineState?
+    private var pipeSsfrThick: MTLRenderPipelineState?
+    private var pipeSsfrBlur: MTLRenderPipelineState?
+    private var pipeSsfrComp: MTLRenderPipelineState?
     private var depthDisabled: MTLDepthStencilState?
     private var depthLessEqual: MTLDepthStencilState?
+
+    // Offscreen 5-Pass SSFR Render Targets (0.75x resolution, half-res thickness)
+    private var ssfrW: Int = 0
+    private var ssfrH: Int = 0
+    private var texSsfrBg: MTLTexture?
+    private var texSsfrDepth: MTLTexture?
+    private var texSsfrDepthZ: MTLTexture?
+    private var texSsfrBlurA: MTLTexture?
+    private var texSsfrBlurB: MTLTexture?
+    private var texSsfrThick: MTLTexture?
 
     // Unified Apple Silicon GPU Buffers
     private var bufPos: MTLBuffer?
@@ -339,6 +367,55 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
         dOn.depthCompareFunction = .lessEqual
         dOn.isDepthWriteEnabled = true
         depthLessEqual = device.makeDepthStencilState(descriptor: dOn)
+
+        // 5-Pass Screen-Space Fluid Rendering (SSFR) + Translucent Refraction Pipelines
+        if let vQuad = lib.makeFunction(name: "ssfr_quad_vert"),
+           let vSprite = lib.makeFunction(name: "ssfr_sprite_vert"),
+           let fBg = lib.makeFunction(name: "ssfr_bg_frag"),
+           let fDepth = lib.makeFunction(name: "ssfr_depth_frag"),
+           let fThick = lib.makeFunction(name: "ssfr_thick_frag"),
+           let fBlur = lib.makeFunction(name: "ssfr_blur_frag"),
+           let fComp = lib.makeFunction(name: "ssfr_composite_frag") {
+            let bgDesc = MTLRenderPipelineDescriptor()
+            bgDesc.vertexFunction = vQuad
+            bgDesc.fragmentFunction = fBg
+            bgDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            bgDesc.depthAttachmentPixelFormat = .depth32Float
+            pipeSsfrBg = try? device.makeRenderPipelineState(descriptor: bgDesc)
+
+            let depDesc = MTLRenderPipelineDescriptor()
+            depDesc.vertexFunction = vSprite
+            depDesc.fragmentFunction = fDepth
+            depDesc.colorAttachments[0].pixelFormat = .r32Float
+            depDesc.depthAttachmentPixelFormat = .depth32Float
+            pipeSsfrDepth = try? device.makeRenderPipelineState(descriptor: depDesc)
+
+            let thkDesc = MTLRenderPipelineDescriptor()
+            thkDesc.vertexFunction = vSprite
+            thkDesc.fragmentFunction = fThick
+            thkDesc.colorAttachments[0].pixelFormat = .rgba16Float
+            thkDesc.colorAttachments[0].isBlendingEnabled = true
+            thkDesc.colorAttachments[0].rgbBlendOperation = .add
+            thkDesc.colorAttachments[0].alphaBlendOperation = .add
+            thkDesc.colorAttachments[0].sourceRGBBlendFactor = .one
+            thkDesc.colorAttachments[0].destinationRGBBlendFactor = .one
+            thkDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
+            thkDesc.colorAttachments[0].destinationAlphaBlendFactor = .one
+            pipeSsfrThick = try? device.makeRenderPipelineState(descriptor: thkDesc)
+
+            let blurDesc = MTLRenderPipelineDescriptor()
+            blurDesc.vertexFunction = vQuad
+            blurDesc.fragmentFunction = fBlur
+            blurDesc.colorAttachments[0].pixelFormat = .r32Float
+            pipeSsfrBlur = try? device.makeRenderPipelineState(descriptor: blurDesc)
+
+            let compDesc = MTLRenderPipelineDescriptor()
+            compDesc.vertexFunction = vQuad
+            compDesc.fragmentFunction = fComp
+            compDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+            compDesc.depthAttachmentPixelFormat = .depth32Float
+            pipeSsfrComp = try? device.makeRenderPipelineState(descriptor: compDesc)
+        }
 
         bufWire = device.makeBuffer(
             length: wireScratch.count * MemoryLayout<SIMD4<Float>>.stride,
@@ -671,7 +748,15 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
 
         camera.updateMatrices(is2D: active2D)
 
-        if let renderEnc = cmdBuf.makeRenderCommandEncoder(descriptor: rpd) {
+        let fullW = max(1, Int(view.drawableSize.width))
+        let fullH = max(1, Int(view.drawableSize.height))
+        let useSsfr = cfg.liquidSurface && cfg.liquidFusion > 0.005 && particleCount > 0
+
+        if useSsfr,
+           let dev = device,
+           encodeSsfr(device: dev, cmdBuf: cmdBuf, finalRpd: rpd, fullW: fullW, fullH: fullH) {
+            // 5-pass SSFR already encoded background, wireframes, depth, thickness, blur, and composite
+        } else if let renderEnc = cmdBuf.makeRenderCommandEncoder(descriptor: rpd) {
             encodeWireframes(enc: renderEnc)
             encodeParticles(enc: renderEnc)
             renderEnc.endEncoding()
@@ -980,6 +1065,203 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
             vertexCount: 4,
             instanceCount: particleCount
         )
+    }
+
+    private func ensureSsfrTargets(device: MTLDevice, fullW: Int, fullH: Int) -> Bool {
+        let targetW = max(4, Int(round(Double(fullW) * 0.75)))
+        let targetH = max(4, Int(round(Double(fullH) * 0.75)))
+        if ssfrW == targetW && ssfrH == targetH && texSsfrBg != nil && texSsfrDepth != nil {
+            return true
+        }
+
+        let tw = max(2, targetW >> 1)
+        let th = max(2, targetH >> 1)
+
+        func makeColorTex(_ w: Int, _ h: Int, _ fmt: MTLPixelFormat) -> MTLTexture? {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: w, height: h, mipmapped: false)
+            d.usage = [.renderTarget, .shaderRead]
+            d.storageMode = .private
+            return device.makeTexture(descriptor: d)
+        }
+
+        let dDepth = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: targetW, height: targetH, mipmapped: false)
+        dDepth.usage = .renderTarget
+        dDepth.storageMode = .private
+
+        texSsfrBg     = makeColorTex(targetW, targetH, .bgra8Unorm)
+        texSsfrDepth  = makeColorTex(targetW, targetH, .r32Float)
+        texSsfrDepthZ = device.makeTexture(descriptor: dDepth)
+        texSsfrBlurA  = makeColorTex(targetW, targetH, .r32Float)
+        texSsfrBlurB  = makeColorTex(targetW, targetH, .r32Float)
+        texSsfrThick  = makeColorTex(tw, th, .rgba16Float)
+
+        guard texSsfrBg != nil, texSsfrDepth != nil, texSsfrDepthZ != nil,
+              texSsfrBlurA != nil, texSsfrBlurB != nil, texSsfrThick != nil else {
+            ssfrW = 0
+            ssfrH = 0
+            return false
+        }
+
+        ssfrW = targetW
+        ssfrH = targetH
+        return true
+    }
+
+    private func encodeSsfr(
+        device: MTLDevice,
+        cmdBuf: MTLCommandBuffer,
+        finalRpd: MTLRenderPassDescriptor,
+        fullW: Int,
+        fullH: Int
+    ) -> Bool {
+        guard let pipeBg = pipeSsfrBg,
+              let pipeDepth = pipeSsfrDepth,
+              let pipeThick = pipeSsfrThick,
+              let pipeBlur = pipeSsfrBlur,
+              let pipeComp = pipeSsfrComp,
+              let dOff = depthDisabled,
+              let dOn = depthLessEqual,
+              let bPos = bufPos,
+              let bVel = bufVel,
+              ensureSsfrTargets(device: device, fullW: fullW, fullH: fullH),
+              let tBg = texSsfrBg,
+              let tDepth = texSsfrDepth,
+              let tDepthZ = texSsfrDepthZ,
+              let tBlurA = texSsfrBlurA,
+              let tBlurB = texSsfrBlurB,
+              let tThick = texSsfrThick else {
+            return false
+        }
+
+        let fusion = min(1.0, max(0.0, cfg.liquidFusion))
+        let baseRad = particleRadius * (active2D ? 1.48 : 1.44)
+        let fusedRad = baseRad * (1.0 + fusion * 0.46)
+        let thickRad = fusedRad * (1.0 + fusion * 0.28)
+        let thickWeight: Float = active2D
+            ? 0.20
+            : max(0.025, min(0.14, 2.6 / sqrt(Float(max(particleCount, 80)))))
+
+        let tanHalfFov = camera.tanHalfFov
+        let aspect = Float(fullW) / Float(max(1, fullH))
+        let camDist = max(0.8, camera.currentDistance)
+        let wideStride = max(2.0, min(4.0, round((Float(ssfrH) * fusedRad) / (camDist * tanHalfFov * 9.0))))
+        let depthThresh = particleRadius * (3.2 + 9.0 * fusion)
+
+        var uMain = SsfrUniformsGPU(
+            view: camera.viewMatrix,
+            proj: camera.projMatrix,
+            params0: SIMD4<Float>(fusedRad, fusion, thickWeight, animTime),
+            params1: SIMD4<Float>(1.0 / Float(ssfrW), 1.0 / Float(ssfrH), 1.0, 0.0),
+            params2: SIMD4<Float>(1.0, depthThresh, tanHalfFov, aspect),
+            shallow: SIMD4<Float>(cfg.shallowRGB.x, cfg.shallowRGB.y, cfg.shallowRGB.z, cfg.refraction),
+            deep: SIMD4<Float>(cfg.deepRGB.x, cfg.deepRGB.y, cfg.deepRGB.z, cfg.foamAmount),
+            optics: SIMD4<Float>(cfg.ior, cfg.roughness, cfg.specular, cfg.metallic),
+            light_inv: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, invRestDensity),
+            modes: SIMD4<Int32>(Int32(cfg.colorMode), Int32(cfg.colorMap), cfg.litSpheres ? 1 : 0, active2D ? 1 : 0)
+        )
+
+        // Pass A: Studio Background + Caustics + Tank & Collider Wireframes
+        let rpdBg = MTLRenderPassDescriptor()
+        rpdBg.colorAttachments[0].texture = tBg
+        rpdBg.colorAttachments[0].loadAction = .clear
+        rpdBg.colorAttachments[0].storeAction = .store
+        rpdBg.colorAttachments[0].clearColor = MTLClearColor(red: 0.043, green: 0.062, blue: 0.094, alpha: 1.0)
+        rpdBg.depthAttachment.texture = tDepthZ
+        rpdBg.depthAttachment.loadAction = .clear
+        rpdBg.depthAttachment.storeAction = .dontCare
+        rpdBg.depthAttachment.clearDepth = 1.0
+
+        if let enc = cmdBuf.makeRenderCommandEncoder(descriptor: rpdBg) {
+            enc.setRenderPipelineState(pipeBg)
+            enc.setDepthStencilState(dOff)
+            enc.setFragmentBytes(&uMain, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            encodeWireframes(enc: enc)
+            enc.endEncoding()
+        }
+
+        // Pass B: Analytical Eye-Space Sphere Depth (with view-Z flattening)
+        let rpdDepth = MTLRenderPassDescriptor()
+        rpdDepth.colorAttachments[0].texture = tDepth
+        rpdDepth.colorAttachments[0].loadAction = .clear
+        rpdDepth.colorAttachments[0].storeAction = .store
+        rpdDepth.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        rpdDepth.depthAttachment.texture = tDepthZ
+        rpdDepth.depthAttachment.loadAction = .clear
+        rpdDepth.depthAttachment.storeAction = .dontCare
+        rpdDepth.depthAttachment.clearDepth = 1.0
+
+        if let enc = cmdBuf.makeRenderCommandEncoder(descriptor: rpdDepth) {
+            enc.setRenderPipelineState(pipeDepth)
+            enc.setDepthStencilState(dOn)
+            enc.setVertexBuffer(bPos, offset: 0, index: 0)
+            enc.setVertexBuffer(bVel, offset: 0, index: 1)
+            enc.setVertexBytes(&uMain, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 2)
+            enc.setFragmentBytes(&uMain, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: particleCount)
+            enc.endEncoding()
+        }
+
+        // Pass C: Half-Resolution Additive Beer-Lambert Thickness + Metric/Speed Splatting
+        var uThick = uMain
+        uThick.params0.x = thickRad
+        let rpdThick = MTLRenderPassDescriptor()
+        rpdThick.colorAttachments[0].texture = tThick
+        rpdThick.colorAttachments[0].loadAction = .clear
+        rpdThick.colorAttachments[0].storeAction = .store
+        rpdThick.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+
+        if let enc = cmdBuf.makeRenderCommandEncoder(descriptor: rpdThick) {
+            enc.setRenderPipelineState(pipeThick)
+            enc.setVertexBuffer(bPos, offset: 0, index: 0)
+            enc.setVertexBuffer(bVel, offset: 0, index: 1)
+            enc.setVertexBytes(&uThick, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 2)
+            enc.setFragmentBytes(&uThick, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: particleCount)
+            enc.endEncoding()
+        }
+
+        // Pass D1..D4: Two-Iteration Separable À-Trous Edge-Preserving Bilateral Depth Blur
+        func runBlurPass(src: MTLTexture, dst: MTLTexture, dirX: Float, dirY: Float, stride: Float) {
+            var uB = uMain
+            uB.params1.z = dirX
+            uB.params1.w = dirY
+            uB.params2.x = stride
+            let rpdB = MTLRenderPassDescriptor()
+            rpdB.colorAttachments[0].texture = dst
+            rpdB.colorAttachments[0].loadAction = .clear
+            rpdB.colorAttachments[0].storeAction = .store
+            rpdB.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            if let enc = cmdBuf.makeRenderCommandEncoder(descriptor: rpdB) {
+                enc.setRenderPipelineState(pipeBlur)
+                enc.setFragmentBytes(&uB, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 0)
+                enc.setFragmentTexture(src, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                enc.endEncoding()
+            }
+        }
+
+        runBlurPass(src: tDepth, dst: tBlurA, dirX: 1.0, dirY: 0.0, stride: 1.0)
+        runBlurPass(src: tBlurA, dst: tBlurB, dirX: 0.0, dirY: 1.0, stride: 1.0)
+        if fusion > 0.08 {
+            runBlurPass(src: tBlurB, dst: tBlurA, dirX: 1.0, dirY: 0.0, stride: wideStride)
+            runBlurPass(src: tBlurA, dst: tBlurB, dirX: 0.0, dirY: 1.0, stride: wideStride)
+        }
+
+        // Pass E: Fullscreen Chromatic Refraction + Beer-Lambert Liquid Composite to Drawable
+        if let enc = cmdBuf.makeRenderCommandEncoder(descriptor: finalRpd) {
+            enc.setRenderPipelineState(pipeComp)
+            enc.setDepthStencilState(dOff)
+            enc.setFragmentBytes(&uMain, length: MemoryLayout<SsfrUniformsGPU>.stride, index: 0)
+            enc.setFragmentTexture(tBg, index: 0)
+            enc.setFragmentTexture(tBlurB, index: 1)
+            enc.setFragmentTexture(tDepth, index: 2)
+            enc.setFragmentTexture(tThick, index: 3)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            enc.endEncoding()
+        }
+
+        return true
     }
 }
 

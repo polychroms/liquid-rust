@@ -2154,7 +2154,7 @@ fn run_headless(
                         is_2d,
                     );
                 }
-                RenderMode::SurfaceMesh => {
+                RenderMode::SurfaceMesh | RenderMode::ScreenSpaceFluid => {
                     if let Some(ref mesh) = built_mesh {
                         rend.render_surface_mesh(
                             mesh,
@@ -2272,7 +2272,7 @@ fn run_headless(
                     is_2d,
                 );
             }
-            RenderMode::SurfaceMesh => {
+            RenderMode::SurfaceMesh | RenderMode::ScreenSpaceFluid => {
                 let mesh = if let Some(ref mut gf) = gpu_surface_field {
                     SurfaceMesh::from_particles_with_gpu(
                         &solver.particles,

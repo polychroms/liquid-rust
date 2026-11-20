@@ -117,6 +117,14 @@ public final class Camera3D {
         distance = Math.max(0.80f, Math.min(8.50f, distance / scaleFactor));
     }
 
+    public synchronized float getDistance() {
+        return distance;
+    }
+
+    public float getTanHalfFov() {
+        return (float) Math.tan(Math.toRadians(FOV_Y_DEG * 0.5));
+    }
+
     public synchronized void updateMatrices(boolean is2D) {
         float aspect = (float) viewportWidth / (float) viewportHeight;
         Matrix.perspectiveM(projMatrix, 0, FOV_Y_DEG, aspect, 0.08f, 32.0f);

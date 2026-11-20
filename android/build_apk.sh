@@ -44,6 +44,11 @@ if command -v glslangValidator >/dev/null 2>&1; then
     glslangValidator -l app/src/main/assets/shaders/line.vert app/src/main/assets/shaders/line.frag >/dev/null
     glslangValidator -l app/src/main/assets/shaders/particle.vert app/src/main/assets/shaders/particle.frag >/dev/null
     glslangValidator -DMODE_3D=1 -l app/src/main/assets/shaders/particle.vert app/src/main/assets/shaders/particle.frag >/dev/null
+    glslangValidator -l app/src/main/assets/shaders/ssfr_quad.vert app/src/main/assets/shaders/ssfr_bg.frag >/dev/null
+    glslangValidator -l app/src/main/assets/shaders/ssfr_sprite.vert app/src/main/assets/shaders/ssfr_depth.frag >/dev/null
+    glslangValidator -l app/src/main/assets/shaders/ssfr_sprite.vert app/src/main/assets/shaders/ssfr_thick.frag >/dev/null
+    glslangValidator -l app/src/main/assets/shaders/ssfr_quad.vert app/src/main/assets/shaders/ssfr_blur.frag >/dev/null
+    glslangValidator -l app/src/main/assets/shaders/ssfr_quad.vert app/src/main/assets/shaders/ssfr_composite.frag >/dev/null
 else
     echo "[1/7] Skipping offline glslangValidator check (not installed)"
 fi

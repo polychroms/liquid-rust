@@ -90,6 +90,9 @@ final class Camera3D {
         distance = min(8.50, max(0.80, distance / factor))
     }
 
+    var currentDistance: Float { distance }
+    var tanHalfFov: Float { tan((fovYDeg * 0.5) * .pi / 180.0) }
+
     func updateMatrices(is2D: Bool) {
         let aspect = max(0.1, viewportWidth / max(1.0, viewportHeight))
         projMatrix = Self.perspectiveRightHandMetal(

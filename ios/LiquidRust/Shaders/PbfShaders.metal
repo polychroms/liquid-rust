@@ -983,3 +983,340 @@ fragment float4 line_frag(
 ) {
     return u.line_color;
 }
+
+// ============================================================================
+// 5-PASS SCREEN-SPACE FLUID RENDERING (SSFR) + TRANSLUCENT REFRACTION
+// ============================================================================
+
+struct SsfrUniforms {
+    float4x4 view;
+    float4x4 proj;
+    float4   params0;   // x: radius, y: fusion, z: thick_weight, w: anim_time
+    float4   params1;   // x: texel_x, y: texel_y, z: dir_x, w: dir_y
+    float4   params2;   // x: tap_stride, y: depth_thresh, z: tan_half_fov, w: aspect
+    float4   shallow;   // rgb + refraction
+    float4   deep;      // rgb + foam_amount
+    float4   optics;    // x: ior, y: roughness, z: specular, w: metallic
+    float4   light_inv; // xyz: light_dir, w: inv_rho0
+    int4     modes;     // x: color_mode, y: color_map, z: lit_spheres, w: is_2d
+};
+
+struct SsfrQuadOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex SsfrQuadOut ssfr_quad_vert(uint vid [[vertex_id]]) {
+    const float2 verts[3] = {
+        float2(-1.0f, -1.0f),
+        float2( 3.0f, -1.0f),
+        float2(-1.0f,  3.0f)
+    };
+    float2 p = verts[vid];
+    SsfrQuadOut out;
+    out.position = float4(p, 0.0f, 1.0f);
+    // Metal texture UV: (0,0) top-left, (1,1) bottom-right
+    out.uv = float2(p.x * 0.5f + 0.5f, 0.5f - p.y * 0.5f);
+    return out;
+}
+
+inline float ssfr_bg_caustic(float2 uv, float t) {
+    float2 p = uv * 5.0f;
+    float a = sin(p.x * 1.4f + t * 1.15f + sin(p.y * 1.6f - t * 0.95f));
+    float b = sin(p.y * 1.5f - t * 1.05f + cos(p.x * 1.3f + t * 1.25f));
+    float c = sin((p.x + p.y) * 1.1f + t * 0.8f);
+    return pow(saturate(1.0f - abs(a + b + c * 0.65f) * 0.65f), 3.6f);
+}
+
+fragment float4 ssfr_bg_frag(
+    SsfrQuadOut in          [[stage_in]],
+    constant SsfrUniforms& u [[buffer(0)]]
+) {
+    float y_up = 1.0f - in.uv.y;
+    float3 low  = float3(0.036f, 0.055f, 0.084f);
+    float3 high = float3(0.072f, 0.108f, 0.162f);
+    float3 bg = mix(low, high, smoothstep(0.0f, 1.0f, y_up));
+
+    // Crisp subtle refraction grid cues
+    float2 g = abs(fract(in.uv * float2(12.0f, 20.0f)) - 0.5f);
+    float gridLine = smoothstep(0.47f, 0.50f, max(g.x, g.y));
+    bg += float3(0.025f, 0.042f, 0.068f) * gridLine * (u.modes.w == 1 ? 0.55f : 0.35f);
+
+    float floor_mask = smoothstep(0.60f, 0.04f, y_up);
+    float t = u.params0.w;
+    float c = ssfr_bg_caustic(in.uv * float2(1.3f, 1.8f), t) * 0.60f
+            + ssfr_bg_caustic(in.uv * float2(1.9f, 2.4f) + float2(0.37f, -0.21f), -t * 0.8f) * 0.40f;
+    bg += mix(u.shallow.xyz, float3(0.75f, 0.94f, 1.0f), 0.35f) * c * floor_mask * 0.085f;
+    return float4(bg, 1.0f);
+}
+
+struct SsfrSpriteOut {
+    float4 position [[position]];
+    float2 uv;
+    float3 eye_center;
+    float  speed_t;
+    float  metric_t;
+};
+
+vertex SsfrSpriteOut ssfr_sprite_vert(
+    const device float4* pos_buf [[buffer(0)]],
+    const device float4* vel_buf [[buffer(1)]],
+    constant SsfrUniforms& u     [[buffer(2)]],
+    uint vid [[vertex_id]],
+    uint iid [[instance_id]]
+) {
+    const float2 corners[4] = {
+        float2(-1.0f, -1.0f),
+        float2( 1.0f, -1.0f),
+        float2(-1.0f,  1.0f),
+        float2( 1.0f,  1.0f)
+    };
+    float2 c = corners[vid];
+    float4 pos_rho = pos_buf[iid];
+    float4 vel_pres = vel_buf[iid];
+
+    float3 eye_c = (u.view * float4(pos_rho.xyz, 1.0f)).xyz;
+    float rad = u.params0.x;
+    float3 eye_p = eye_c + float3(c * rad, 0.0f);
+
+    float speed = length(vel_pres.xyz);
+    float speed_t = min(speed / 2.8f, 1.0f);
+    float metric_t = speed_t;
+    int cm = u.modes.x;
+    if (cm == 0) {
+        metric_t = min(speed / 2.5f, 1.0f);
+    } else if (cm == 1) {
+        metric_t = saturate(vel_pres.w);
+    } else if (cm == 2) {
+        metric_t = min(abs(pos_rho.w * u.light_inv.w - 1.0f) * 4.0f, 1.0f);
+    }
+
+    SsfrSpriteOut out;
+    out.position = u.proj * float4(eye_p, 1.0f);
+    out.uv = c;
+    out.eye_center = eye_c;
+    out.speed_t = speed_t;
+    out.metric_t = metric_t;
+    return out;
+}
+
+struct SsfrDepthOut {
+    float4 color [[color(0)]];
+    float  depth [[depth(any)]];
+};
+
+fragment SsfrDepthOut ssfr_depth_frag(
+    SsfrSpriteOut in         [[stage_in]],
+    constant SsfrUniforms& u [[buffer(0)]]
+) {
+    float r2 = dot(in.uv, in.uv);
+    if (r2 > 1.0f) {
+        discard_fragment();
+    }
+    float z = sqrt(max(1.0f - r2, 0.0f));
+    float rad = u.params0.x;
+    float fusion = u.params0.y;
+    float flat_z = mix(1.0f, 0.36f, smoothstep(0.15f, 1.0f, fusion));
+    float3 sphere_eye = in.eye_center + float3(in.uv.x * rad, in.uv.y * rad, z * rad * flat_z);
+
+    float4 clip_p = u.proj * float4(sphere_eye, 1.0f);
+    SsfrDepthOut out;
+    out.depth = saturate(clip_p.z / clip_p.w);
+    out.color = float4(max(-sphere_eye.z, 0.001f), 0.0f, 0.0f, 1.0f);
+    return out;
+}
+
+fragment float4 ssfr_thick_frag(
+    SsfrSpriteOut in         [[stage_in]],
+    constant SsfrUniforms& u [[buffer(0)]]
+) {
+    float r2 = dot(in.uv, in.uv);
+    if (r2 > 1.0f) {
+        discard_fragment();
+    }
+    float z = sqrt(max(1.0f - r2, 0.0f));
+    float w = pow(z, 1.35f) * u.params0.z;
+    return float4(w, w * in.metric_t, w * in.speed_t, 0.0f);
+}
+
+fragment float4 ssfr_blur_frag(
+    SsfrQuadOut in               [[stage_in]],
+    constant SsfrUniforms& u     [[buffer(0)]],
+    texture2d<float> t_depth     [[texture(0)]]
+) {
+    constexpr sampler s_near(mag_filter::nearest, min_filter::nearest, address::clamp_to_edge);
+    float center_d = t_depth.sample(s_near, in.uv).r;
+    if (center_d <= 0.0001f) {
+        return float4(0.0f);
+    }
+
+    float sum_d = center_d;
+    float w_sum = 1.0f;
+
+    float fusion = u.params0.y;
+    float blur_str = smoothstep(0.02f, 1.0f, fusion);
+    float thresh = max(u.params2.y, 0.008f);
+    float inv_2sd2 = 1.0f / (2.0f * thresh * thresh);
+    float inv_2ss2 = 1.0f / (2.0f * 2.6f * 2.6f);
+    float2 step_uv = u.params1.zw * u.params1.xy * u.params2.x;
+
+    for (int i = -4; i <= 4; ++i) {
+        if (i == 0) continue;
+        float fi = float(i) * blur_str;
+        float2 suv = clamp(in.uv + step_uv * fi, float2(0.0005f), float2(0.9995f));
+        float sd = t_depth.sample(s_near, suv).r;
+        if (sd > 0.0001f) {
+            float dd = sd - center_d;
+            float w = exp(-(fi * fi) * inv_2ss2 - (dd * dd) * inv_2sd2);
+            sum_d += sd * w;
+            w_sum += w;
+        }
+    }
+    return float4(sum_d / w_sum, 0.0f, 0.0f, 1.0f);
+}
+
+inline float3 ssfr_uv_to_eye(float2 uv, float depth_m, constant SsfrUniforms& u) {
+    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float thf = u.params2.z;
+    float asp = u.params2.w;
+    return float3(ndc.x * depth_m * thf * asp, ndc.y * depth_m * thf, -depth_m);
+}
+
+inline float3 ssfr_eval_colormap(float t, int cmap) {
+    if (cmap == 1) return colormap_turbo(t);
+    if (cmap == 2) return colormap_viridis(t);
+    if (cmap == 3) return colormap_fire(t);
+    return colormap_ocean(t);
+}
+
+fragment float4 ssfr_composite_frag(
+    SsfrQuadOut in               [[stage_in]],
+    constant SsfrUniforms& u     [[buffer(0)]],
+    texture2d<float> t_bg        [[texture(0)]],
+    texture2d<float> t_smooth    [[texture(1)]],
+    texture2d<float> t_raw       [[texture(2)]],
+    texture2d<float> t_thick     [[texture(3)]]
+) {
+    constexpr sampler s_lin(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    constexpr sampler s_near(mag_filter::nearest, min_filter::nearest, address::clamp_to_edge);
+
+    float3 bg_col = t_bg.sample(s_lin, in.uv).rgb;
+    float center_d = t_smooth.sample(s_near, in.uv).r;
+    float3 th_sample = t_thick.sample(s_lin, in.uv).rgb;
+    float thickness = max(th_sample.r, 0.0f) * 1.75f;
+    float metric_val = (th_sample.r > 0.004f) ? saturate(th_sample.g / th_sample.r) : 0.0f;
+    float speed_e = (th_sample.r > 0.004f) ? saturate(th_sample.b / th_sample.r) : 0.0f;
+
+    float fusion = u.params0.y;
+    float3 shallow = u.shallow.xyz;
+    float3 deep = u.deep.xyz;
+    int color_mode = u.modes.x;
+    if (color_mode != 3) {
+        shallow = ssfr_eval_colormap(metric_val, u.modes.y);
+        deep = shallow * 0.45f;
+    }
+
+    float sheath_str = smoothstep(0.05f, 0.50f, fusion) * (1.0f - smoothstep(0.88f, 1.0f, fusion));
+    if (center_d <= 0.0001f) {
+        if (sheath_str > 0.01f && thickness > 0.06f) {
+            float halo = smoothstep(0.06f, 0.28f, thickness) * sheath_str;
+            float3 rim_tint = mix(shallow, float3(0.88f, 0.98f, 1.0f), 0.45f);
+            return float4(mix(bg_col, rim_tint, halo * 0.42f), 1.0f);
+        }
+        return float4(bg_col, 1.0f);
+    }
+
+    float raw_d = t_raw.sample(s_near, in.uv).r;
+    float3 eye_pos = ssfr_uv_to_eye(in.uv, center_d, u);
+
+    float step_px = (u.params1.y < 0.00075f) ? 2.0f : 1.0f;
+    float2 sx = float2(u.params1.x * step_px, 0.0f);
+    float2 sy = float2(0.0f, u.params1.y * step_px);
+
+    float sR = t_smooth.sample(s_near, clamp(in.uv + sx, float2(0.0005f), float2(0.9995f))).r;
+    float sL = t_smooth.sample(s_near, clamp(in.uv - sx, float2(0.0005f), float2(0.9995f))).r;
+    float sU = t_smooth.sample(s_near, clamp(in.uv - sy, float2(0.0005f), float2(0.9995f))).r;
+    float sD = t_smooth.sample(s_near, clamp(in.uv + sy, float2(0.0005f), float2(0.9995f))).r;
+
+    bool vR = sR > 0.0001f;
+    bool vL = sL > 0.0001f;
+    bool vU = sU > 0.0001f;
+    bool vD = sD > 0.0001f;
+
+    float3 posR = ssfr_uv_to_eye(in.uv + sx, vR ? sR : center_d, u);
+    float3 posL = ssfr_uv_to_eye(in.uv - sx, vL ? sL : center_d, u);
+    float3 posU = ssfr_uv_to_eye(in.uv - sy, vU ? sU : center_d, u);
+    float3 posD = ssfr_uv_to_eye(in.uv + sy, vD ? sD : center_d, u);
+
+    float3 ddx = (vR && vL)
+        ? ((abs(sR - center_d) < abs(center_d - sL)) ? (posR - eye_pos) : (eye_pos - posL))
+        : (vR ? (posR - eye_pos) : (vL ? (eye_pos - posL) : float3(posR.x - eye_pos.x, 0.0f, 0.0f)));
+    float3 ddy = (vU && vD)
+        ? ((abs(sU - center_d) < abs(center_d - sD)) ? (posU - eye_pos) : (eye_pos - posD))
+        : (vU ? (posU - eye_pos) : (vD ? (eye_pos - posD) : float3(0.0f, posU.y - eye_pos.y, 0.0f)));
+
+    float3 normal = normalize(cross(ddx, ddy));
+    if (normal.z < 0.0f) normal = -normal;
+
+    float3 view_dir = normalize(-eye_pos);
+    float3 light_dir = normalize(u.light_inv.xyz);
+    float3 half_vec = normalize(light_dir + view_dir);
+
+    float ndotl = max(0.0f, dot(normal, light_dir));
+    float ndotv = max(0.001f, dot(normal, view_dir));
+    float ndoth = max(0.0f, dot(normal, half_vec));
+
+    bool lit = (u.modes.z != 0);
+    float ior = max(u.optics.x, 1.01f);
+    float rough = clamp(max(u.optics.y, 0.055f), 0.055f, 0.95f);
+    float spec_mult = lit ? max(u.optics.z, 0.0f) : 0.0f;
+    float metallic = (color_mode == 3) ? saturate(u.optics.w) : 0.0f;
+
+    float f0_diel = pow((ior - 1.0f) / (ior + 1.0f), 2.0f);
+    float3 f0 = mix(float3(f0_diel), shallow, metallic);
+    float3 fresnel = f0 + (float3(1.0f) - f0) * pow(1.0f - ndotv, 4.4f);
+
+    float spec_pow = clamp(1.8f / (rough * rough + 0.003f), 18.0f, 180.0f);
+    float3 spec = pow(ndoth, spec_pow) * mix(0.85f, 1.35f, fusion) * spec_mult
+                * mix(float3(1.0f, 0.99f, 0.97f), shallow, metallic * 0.5f);
+
+    float ball_vis = 1.0f - smoothstep(0.15f, 0.92f, fusion);
+    float crevice_ao = clamp(1.0f - max(0.0f, raw_d - center_d) * 14.0f * ball_vis, 0.55f, 1.0f);
+
+    // Chromatic screen-space background refraction (flip Y for Metal top-left UV) + Beer-Lambert
+    float refr_amt = mix(0.014f, 0.054f, fusion) * clamp(u.shallow.w * 1.8f, 0.0f, 1.8f) * (0.35f + min(thickness, 2.0f));
+    float2 r_delta = float2(normal.x, -normal.y) * refr_amt;
+    float2 uvR = clamp(in.uv + r_delta * 0.94f, float2(0.001f), float2(0.999f));
+    float2 uvG = clamp(in.uv + r_delta,         float2(0.001f), float2(0.999f));
+    float2 uvB = clamp(in.uv + r_delta * 1.06f, float2(0.001f), float2(0.999f));
+    float3 refr_bg = float3(
+        t_bg.sample(s_lin, uvR).r,
+        t_bg.sample(s_lin, uvG).g,
+        t_bg.sample(s_lin, uvB).b
+    );
+
+    float3 absorb_coeff = max(float3(1.0f) - shallow * 0.90f, float3(0.05f)) * 1.35f + float3(0.05f, 0.025f, 0.012f);
+    float3 transmittance = exp(-absorb_coeff * thickness * 1.45f);
+
+    float3 tint_col = mix(shallow, deep, saturate(1.0f - exp(-thickness * 1.05f)));
+    float3 deep_tint = tint_col * (0.36f + 0.64f * ndotl) * crevice_ao;
+    float3 shallow_water = mix(refr_bg * transmittance + deep_tint * (float3(1.0f) - transmittance) * 0.88f, deep_tint, metallic);
+
+    float3 refl_dir = reflect(-view_dir, normal);
+    float sky_t = pow(saturate(refl_dir.y * 0.5f + 0.5f), 1.45f);
+    float3 sky_refl = mix(float3(0.09f, 0.17f, 0.30f), float3(0.76f, 0.90f, 1.0f), sky_t);
+    float softbox = pow(saturate(dot(refl_dir, normalize(float3(-0.20f, 0.82f, 0.38f)))), 14.0f);
+    sky_refl += float3(0.72f, 0.84f, 0.96f) * softbox;
+    sky_refl *= mix(float3(1.0f), shallow, metallic);
+    float refl_gain = lit ? 1.0f : 0.25f;
+
+    float crest_foam = smoothstep(0.45f, 0.95f, speed_e) * smoothstep(0.04f, 0.24f, thickness)
+                     * 0.55f * fusion * u.deep.w * (1.0f - metallic);
+
+    float3 liquid_col = mix(shallow_water, sky_refl, clamp(fresnel * mix(0.45f, 0.92f, fusion) * refl_gain, float3(0.0f), float3(0.94f)))
+                      + spec * fresnel
+                      + float3(0.90f, 0.97f, 1.0f) * crest_foam;
+
+    float3 solid_ball_col = (deep_tint + sky_refl * fresnel * 0.35f * refl_gain) * crevice_ao + spec * 0.65f;
+    return float4(saturate(mix(solid_ball_col, liquid_col, smoothstep(0.0f, 0.65f, fusion))), 1.0f);
+}

@@ -5,13 +5,13 @@
 import { Vec3, Ray } from './math.js?v=20261113b';
 import { Camera } from './camera.js?v=20261113b';
 import { PbfSolver, ScenePreset } from './pbf-solver.js?v=20261113b';
-import { GlRenderer } from './gl-renderer.js?v=20261113b';
+import { GlRenderer } from './gl-renderer.js?v=20261120a';
 import { WebGpuSolver } from './webgpu-solver.js?v=20261113b';
-import { WebGpuRenderer } from './webgpu-renderer.js?v=20261113b';
+import { WebGpuRenderer } from './webgpu-renderer.js?v=20261120a';
 
 const RELEASE_LATEST = 'https://github.com/rappar222/liquid-rust/releases/latest';
 const RELEASE_DL = `${RELEASE_LATEST}/download`;
-const RELEASE_VER_DL = 'https://github.com/rappar222/liquid-rust/releases/download/v0.3.11';
+const RELEASE_VER_DL = 'https://github.com/rappar222/liquid-rust/releases/download/v0.4.0';
 const ANDROID_APK_URL = `${RELEASE_DL}/liquid-rust-android.apk`;
 const IOS_IPA_URL = `${RELEASE_DL}/liquid-rust-ios.ipa`;
 
@@ -57,6 +57,8 @@ class LiquidApp {
         this.renderOpts = {
             colorMode: 'material',
             colorMapType: 'ocean',
+            liquidSurface: true,
+            liquidFusion: 1.0,
             litSpheres: true,
             shallowColor: hexToRgb('#38bdf8'),
             deepColor: hexToRgb('#0c3b8a'),
@@ -415,6 +417,28 @@ class LiquidApp {
             this.renderOpts.colorMapType = e.target.value;
         });
 
+        const checkSsfr = document.getElementById('check-ssfr');
+        const matFusion = document.getElementById('mat-fusion');
+        const valFusion = document.getElementById('val-mat-fusion');
+        const fusionGroup = document.getElementById('fusion-group');
+        if (checkSsfr) {
+            checkSsfr.addEventListener('change', (e) => {
+                this.renderOpts.liquidSurface = e.target.checked;
+                if (fusionGroup) fusionGroup.style.display = e.target.checked ? 'block' : 'none';
+            });
+        }
+        if (matFusion) {
+            matFusion.addEventListener('input', (e) => {
+                const pct = parseInt(e.target.value, 10) || 0;
+                this.renderOpts.liquidFusion = pct / 100.0;
+                if (valFusion) {
+                    if (pct <= 0) valFusion.textContent = 'Balls';
+                    else if (pct < 90) valFusion.textContent = `Coated ${pct}%`;
+                    else valFusion.textContent = 'Liquid';
+                }
+            });
+        }
+
         document.getElementById('check-lit-spheres').addEventListener('change', (e) => {
             this.renderOpts.litSpheres = e.target.checked;
         });
@@ -641,47 +665,26 @@ class LiquidApp {
                 primaryHref = `${RELEASE_DL}/liquid-rust-linux-aarch64.tar.gz`;
                 headerLabel = '⬇ Linux ARM64';
                 alts = [
-                    { label: '.rpm (aarch64)', href: `${RELEASE_VER_DL}/liquid-rust-0.3.11-1.aarch64.rpm` },
-                    { label: 'x86_64 AppImage', href: `${RELEASE_DL}/liquid-rust-x86_64.AppImage` },
+                    { label: 'liquid-rust-install.sh', href: `${RELEASE_DL}/liquid-rust-install.sh` },
+                    { label: 'Android .apk', href: ANDROID_APK_URL },
                     { label: 'All Releases', href: RELEASE_LATEST },
                 ];
             } else {
-                const uaLow = ua.toLowerCase();
-                if (/ubuntu|debian|mint|pop!_os/.test(uaLow)) {
-                    osLabel = 'Ubuntu / Debian x64';
-                    primaryLabel = '⬇ Download Ubuntu (.deb)';
-                    primaryHref = `${RELEASE_VER_DL}/liquid-rust_0.3.11_amd64.deb`;
-                    alts = [
-                        { label: 'AppImage', href: `${RELEASE_DL}/liquid-rust-x86_64.AppImage` },
-                        { label: 'Android .apk', href: ANDROID_APK_URL },
-                        { label: 'All Releases', href: RELEASE_LATEST },
-                    ];
-                } else if (/fedora|rhel|centos|rocky|alma/.test(uaLow)) {
-                    osLabel = 'Fedora / RHEL x64';
-                    primaryLabel = '⬇ Download Fedora (.rpm)';
-                    primaryHref = `${RELEASE_VER_DL}/liquid-rust-0.3.11-1.x86_64.rpm`;
-                    alts = [
-                        { label: 'AppImage', href: `${RELEASE_DL}/liquid-rust-x86_64.AppImage` },
-                        { label: 'Android .apk', href: ANDROID_APK_URL },
-                        { label: 'All Releases', href: RELEASE_LATEST },
-                    ];
-                } else {
-                    osLabel = 'Linux x86_64';
-                    primaryLabel = '⬇ Download Linux (AppImage)';
-                    primaryHref = `${RELEASE_DL}/liquid-rust-x86_64.AppImage`;
-                    alts = [
-                        { label: '.deb', href: `${RELEASE_VER_DL}/liquid-rust_0.3.11_amd64.deb` },
-                        { label: '.rpm', href: `${RELEASE_VER_DL}/liquid-rust-0.3.11-1.x86_64.rpm` },
-                        { label: 'Android .apk', href: ANDROID_APK_URL },
-                        { label: 'All Releases', href: RELEASE_LATEST },
-                    ];
-                }
+                osLabel = 'Linux x86_64';
+                primaryLabel = '⬇ Download Linux x86_64 (.tar.gz)';
+                primaryHref = `${RELEASE_DL}/liquid-rust-linux-x86_64.tar.gz`;
                 headerLabel = '⬇ Linux App';
+                alts = [
+                    { label: 'liquid-rust-install.sh', href: `${RELEASE_DL}/liquid-rust-install.sh` },
+                    { label: 'ARM64 (.tar.gz)', href: `${RELEASE_DL}/liquid-rust-linux-aarch64.tar.gz` },
+                    { label: 'Android .apk', href: ANDROID_APK_URL },
+                    { label: 'All Releases', href: RELEASE_LATEST },
+                ];
             }
         } else {
             alts = [
                 { label: 'Windows .zip', href: `${RELEASE_DL}/liquid-rust-windows-x86_64.zip` },
-                { label: 'Linux AppImage', href: `${RELEASE_DL}/liquid-rust-x86_64.AppImage` },
+                { label: 'Linux x86_64 (.tar.gz)', href: `${RELEASE_DL}/liquid-rust-linux-x86_64.tar.gz` },
                 { label: 'macOS ARM64', href: `${RELEASE_DL}/liquid-rust-macos-arm64.tar.gz` },
             ];
         }

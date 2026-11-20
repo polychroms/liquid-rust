@@ -1056,3 +1056,342 @@ fn fs_main() -> @location(0) vec4<f32> {
     return uniforms.color;
 }
 `;
+
+export const SSFR_WGSL = `
+struct SsfrUniforms {
+    view: mat4x4<f32>,
+    proj: mat4x4<f32>,
+    params0: vec4<f32>, // x: radius, y: fusion, z: thick_weight, w: anim_time
+    params1: vec4<f32>, // x: texel_x, y: texel_y, z: dir_x, w: dir_y
+    params2: vec4<f32>, // x: tap_stride, y: depth_thresh, z: tan_half_fov, w: aspect
+    shallow: vec4<f32>, // rgb + refraction
+    deep: vec4<f32>,    // rgb + foam_amount
+    optics: vec4<f32>,  // x: ior, y: roughness, z: specular, w: metallic
+    light: vec4<f32>,   // xyz: light_dir, w: pad
+};
+
+struct Particle {
+    pos_type: vec4<f32>,
+    vel_dens: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: SsfrUniforms;
+@group(0) @binding(1) var<storage, read> particles: array<Particle>;
+
+struct QuadOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn quad_vs(@builtin(vertex_index) vid: u32) -> QuadOut {
+    var verts = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    let p = verts[vid];
+    var out: QuadOut;
+    out.pos = vec4<f32>(p, 0.0, 1.0);
+    out.uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    return out;
+}
+
+fn bg_caustic(uv: vec2<f32>, t: f32) -> f32 {
+    let p = uv * 5.2;
+    let a = sin(p.x * 1.4 + t * 1.15 + sin(p.y * 1.6 - t * 0.95));
+    let b = sin(p.y * 1.5 - t * 1.05 + cos(p.x * 1.3 + t * 1.25));
+    let c = sin((p.x + p.y) * 1.1 + t * 0.8);
+    return pow(clamp(1.0 - abs(a + b + c * 0.65) * 0.65, 0.0, 1.0), 3.6);
+}
+
+@fragment
+fn bg_fs(in: QuadOut) -> @location(0) vec4<f32> {
+    let y_up = 1.0 - in.uv.y;
+    let low = vec3<f32>(0.028, 0.043, 0.072);
+    let high = vec3<f32>(0.062, 0.095, 0.155);
+    var bg = mix(low, high, smoothstep(0.0, 1.0, y_up));
+    let floor_mask = smoothstep(0.55, 0.05, y_up);
+    let t = u.params0.w;
+    let c = bg_caustic(in.uv * vec2<f32>(1.4, 1.1), t) * 0.6
+          + bg_caustic(in.uv * 1.9 + vec2<f32>(0.37, -0.21), -t * 0.8) * 0.4;
+    bg += mix(u.shallow.xyz, vec3<f32>(0.75, 0.94, 1.0), 0.35) * c * floor_mask * 0.09;
+    return vec4<f32>(bg, 1.0);
+}
+
+struct SpriteOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) eye_center: vec3<f32>,
+    @location(2) speed_t: f32,
+};
+
+@vertex
+fn sprite_vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> SpriteOut {
+    var corners = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+    );
+    let c = corners[vid];
+    let p = particles[iid];
+    let eye_c = (u.view * vec4<f32>(p.pos_type.xyz, 1.0)).xyz;
+    let rad = u.params0.x;
+    let eye_p = eye_c + vec3<f32>(c * rad, 0.0);
+
+    var out: SpriteOut;
+    out.pos = u.proj * vec4<f32>(eye_p, 1.0);
+    out.uv = c;
+    out.eye_center = eye_c;
+    out.speed_t = clamp(length(p.vel_dens.xyz) / 2.8, 0.0, 1.0);
+    return out;
+}
+
+struct DepthFragOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
+@fragment
+fn depth_fs(in: SpriteOut) -> DepthFragOut {
+    let r2 = dot(in.uv, in.uv);
+    if (r2 > 1.0) { discard; }
+    let z = sqrt(max(1.0 - r2, 0.0));
+    let rad = u.params0.x;
+    let fusion = u.params0.y;
+    let flat_z = mix(1.0, 0.36, smoothstep(0.15, 1.0, fusion));
+    let sphere_eye = in.eye_center + vec3<f32>(in.uv.x * rad, in.uv.y * rad, z * rad * flat_z);
+    let clip_p = u.proj * vec4<f32>(sphere_eye, 1.0);
+    var out: DepthFragOut;
+    out.depth = clamp(clip_p.z / clip_p.w, 0.0, 1.0);
+    out.color = vec4<f32>(max(-sphere_eye.z, 0.001), 0.0, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn thick_fs(in: SpriteOut) -> @location(0) vec4<f32> {
+    let r2 = dot(in.uv, in.uv);
+    if (r2 > 1.0) { discard; }
+    let z = sqrt(max(1.0 - r2, 0.0));
+    let w = pow(z, 1.35) * u.params0.z;
+    return vec4<f32>(w, w * in.speed_t, 0.0, 0.0);
+}
+`;
+
+export const SSFR_POST_WGSL = `
+struct SsfrUniforms {
+    view: mat4x4<f32>,
+    proj: mat4x4<f32>,
+    params0: vec4<f32>,
+    params1: vec4<f32>, // x: texel_x, y: texel_y, z: dir_x, w: dir_y
+    params2: vec4<f32>, // x: tap_stride, y: depth_thresh, z: tan_half_fov, w: aspect
+    shallow: vec4<f32>, // rgb + refraction
+    deep: vec4<f32>,    // rgb + foam_amount
+    optics: vec4<f32>,  // x: ior, y: roughness, z: specular, w: metallic
+    light: vec4<f32>,   // xyz: light_dir, w: pad
+};
+
+@group(0) @binding(0) var<uniform> u: SsfrUniforms;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var t_in0: texture_2d<f32>;
+@group(0) @binding(3) var t_in1: texture_2d<f32>;
+@group(0) @binding(4) var t_in2: texture_2d<f32>;
+@group(0) @binding(5) var t_in3: texture_2d<f32>;
+
+struct QuadOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn quad_vs(@builtin(vertex_index) vid: u32) -> QuadOut {
+    var verts = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    let p = verts[vid];
+    var out: QuadOut;
+    out.pos = vec4<f32>(p, 0.0, 1.0);
+    out.uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    return out;
+}
+
+@fragment
+fn blur_fs(in: QuadOut) -> @location(0) vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t_in0));
+    let max_c = dims - vec2<i32>(1, 1);
+    let px = clamp(vec2<i32>(floor(in.pos.xy)), vec2<i32>(0), max_c);
+    let center_d = textureLoad(t_in0, px, 0).r;
+    if (center_d <= 0.0001) {
+        return vec4<f32>(0.0);
+    }
+    var sum_d = center_d;
+    var w_sum = 1.0;
+
+    let fusion = u.params0.y;
+    let blur_str = smoothstep(0.02, 1.0, fusion);
+    let thresh = max(u.params2.y, 0.008);
+    let inv_2sd2 = 1.0 / (2.0 * thresh * thresh);
+    let inv_2ss2 = 1.0 / (2.0 * 2.6 * 2.6);
+    let stride = u.params2.x;
+    let dir = u.params1.zw;
+
+    for (var i: i32 = -4; i <= 4; i = i + 1) {
+        if (i == 0) { continue; }
+        let fi = f32(i) * blur_str;
+        let off = vec2<i32>(round(dir * (fi * stride)));
+        let spx = clamp(px + off, vec2<i32>(0), max_c);
+        let sd = textureLoad(t_in0, spx, 0).r;
+        if (sd > 0.0001) {
+            let dd = sd - center_d;
+            let w = exp(-(fi * fi) * inv_2ss2 - (dd * dd) * inv_2sd2);
+            sum_d += sd * w;
+            w_sum += w;
+        }
+    }
+    return vec4<f32>(sum_d / w_sum, 0.0, 0.0, 1.0);
+}
+
+fn uv_to_eye_pos(uv: vec2<f32>, depth_m: f32) -> vec3<f32> {
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let thf = u.params2.z;
+    let asp = u.params2.w;
+    return vec3<f32>(ndc.x * depth_m * thf * asp, ndc.y * depth_m * thf, -depth_m);
+}
+
+@fragment
+fn composite_fs(in: QuadOut) -> @location(0) vec4<f32> {
+    // t_in0 = bg (rgba/bgra), t_in1 = smooth_depth (r32float), t_in2 = raw_depth (r32float), t_in3 = thickness (rgba16float)
+    let bg_col = textureSampleLevel(t_in0, samp, in.uv, 0.0).rgb;
+    let dims = vec2<i32>(textureDimensions(t_in1));
+    let max_c = dims - vec2<i32>(1, 1);
+    let px = clamp(vec2<i32>(floor(in.uv * vec2<f32>(dims))), vec2<i32>(0), max_c);
+
+    let center_d = textureLoad(t_in1, px, 0).r;
+    let th_sample = textureSampleLevel(t_in3, samp, in.uv, 0.0).rg;
+    let thickness = max(th_sample.r, 0.0) * 1.45;
+    let speed_e = select(0.0, clamp(th_sample.g / th_sample.r, 0.0, 1.0), th_sample.r > 0.004);
+
+    let fusion = u.params0.y;
+    let shallow = u.shallow.xyz;
+    let deep = u.deep.xyz;
+
+    let sheath_str = smoothstep(0.05, 0.50, fusion) * (1.0 - smoothstep(0.88, 1.0, fusion));
+    if (center_d <= 0.0001) {
+        if (sheath_str > 0.01 && thickness > 0.06) {
+            let halo = smoothstep(0.06, 0.28, thickness) * sheath_str;
+            let rim_tint = mix(shallow, vec3<f32>(0.88, 0.98, 1.0), 0.45);
+            return vec4<f32>(mix(bg_col, rim_tint, halo * 0.42), 1.0);
+        }
+        return vec4<f32>(bg_col, 1.0);
+    }
+
+    let raw_d = textureLoad(t_in2, px, 0).r;
+    let fdims = vec2<f32>(dims);
+    let center_uv = (vec2<f32>(px) + vec2<f32>(0.5)) / fdims;
+    let eye_pos = uv_to_eye_pos(center_uv, center_d);
+
+    let step_i = select(1, 2, dims.y >= 1400);
+    let pxR = clamp(px + vec2<i32>(step_i, 0), vec2<i32>(0), max_c);
+    let pxL = clamp(px - vec2<i32>(step_i, 0), vec2<i32>(0), max_c);
+    let pxU = clamp(px - vec2<i32>(0, step_i), vec2<i32>(0), max_c);
+    let pxD = clamp(px + vec2<i32>(0, step_i), vec2<i32>(0), max_c);
+
+    let dR = textureLoad(t_in1, pxR, 0).r;
+    let dL = textureLoad(t_in1, pxL, 0).r;
+    let dU = textureLoad(t_in1, pxU, 0).r;
+    let dD = textureLoad(t_in1, pxD, 0).r;
+
+    let vR = dR > 0.0001;
+    let vL = dL > 0.0001;
+    let vU = dU > 0.0001;
+    let vD = dD > 0.0001;
+
+    let posR = uv_to_eye_pos((vec2<f32>(pxR) + vec2<f32>(0.5)) / fdims, select(center_d, dR, vR));
+    let posL = uv_to_eye_pos((vec2<f32>(pxL) + vec2<f32>(0.5)) / fdims, select(center_d, dL, vL));
+    let posU = uv_to_eye_pos((vec2<f32>(pxU) + vec2<f32>(0.5)) / fdims, select(center_d, dU, vU));
+    let posD = uv_to_eye_pos((vec2<f32>(pxD) + vec2<f32>(0.5)) / fdims, select(center_d, dD, vD));
+
+    var ddx = vec3<f32>(posR.x - eye_pos.x, 0.0, 0.0);
+    if (vR && vL) {
+        ddx = select(eye_pos - posL, posR - eye_pos, abs(dR - center_d) < abs(center_d - dL));
+    } else if (vR) {
+        ddx = posR - eye_pos;
+    } else if (vL) {
+        ddx = eye_pos - posL;
+    }
+
+    var ddy = vec3<f32>(0.0, posU.y - eye_pos.y, 0.0);
+    if (vU && vD) {
+        ddy = select(eye_pos - posD, posU - eye_pos, abs(dU - center_d) < abs(center_d - dD));
+    } else if (vU) {
+        ddy = posU - eye_pos;
+    } else if (vD) {
+        ddy = eye_pos - posD;
+    }
+
+    var normal = normalize(cross(ddx, ddy));
+    if (normal.z < 0.0) { normal = -normal; }
+
+    let view_dir = normalize(-eye_pos);
+    let light_dir = normalize(u.light.xyz);
+    let half_vec = normalize(light_dir + view_dir);
+
+    let ndotl = max(0.0, dot(normal, light_dir));
+    let ndotv = max(0.001, dot(normal, view_dir));
+    let ndoth = max(0.0, dot(normal, half_vec));
+
+    let ior = max(u.optics.x, 1.01);
+    let rough = clamp(max(u.optics.y, 0.055), 0.055, 0.95);
+    let spec_mult = max(u.optics.z, 0.0);
+    let metallic = clamp(u.optics.w, 0.0, 1.0);
+    let f0_diel = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    let f0 = mix(vec3<f32>(f0_diel), shallow, metallic);
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - ndotv, 4.4);
+
+    let spec_pow = clamp(1.8 / (rough * rough + 0.003), 18.0, 180.0);
+    let spec = pow(ndoth, spec_pow) * mix(0.85, 1.35, fusion) * spec_mult
+             * mix(vec3<f32>(1.0, 0.99, 0.97), shallow, metallic * 0.5);
+
+    let ball_vis = 1.0 - smoothstep(0.15, 0.92, fusion);
+    let crevice_ao = clamp(1.0 - max(0.0, raw_d - center_d) * 14.0 * ball_vis, 0.55, 1.0);
+
+    // Chromatic screen-space background refraction (flip Y for WebGPU top-left UV) + Beer-Lambert
+    let refr_amt = mix(0.014, 0.054, fusion) * clamp(u.shallow.w * 1.8, 0.0, 1.8) * (0.35 + min(thickness, 2.0));
+    let r_delta = vec2<f32>(normal.x, -normal.y) * refr_amt;
+    let uvR = clamp(in.uv + r_delta * 0.94, vec2<f32>(0.001), vec2<f32>(0.999));
+    let uvG = clamp(in.uv + r_delta, vec2<f32>(0.001), vec2<f32>(0.999));
+    let uvB = clamp(in.uv + r_delta * 1.06, vec2<f32>(0.001), vec2<f32>(0.999));
+    let refr_bg = vec3<f32>(
+        textureSampleLevel(t_in0, samp, uvR, 0.0).r,
+        textureSampleLevel(t_in0, samp, uvG, 0.0).g,
+        textureSampleLevel(t_in0, samp, uvB, 0.0).b,
+    );
+
+    let absorb_coeff = max(vec3<f32>(1.0) - shallow * 0.90, vec3<f32>(0.05)) * 1.35 + vec3<f32>(0.05, 0.025, 0.012);
+    let transmittance = exp(-absorb_coeff * thickness * 1.45);
+
+    let tint_col = mix(shallow, deep, clamp(1.0 - exp(-thickness * 1.05), 0.0, 1.0));
+    let deep_tint = tint_col * (0.36 + 0.64 * ndotl) * crevice_ao;
+    let shallow_water = mix(refr_bg * transmittance + deep_tint * (vec3<f32>(1.0) - transmittance) * 0.88, deep_tint, metallic);
+
+    let refl_dir = reflect(-view_dir, normal);
+    let sky_t = pow(clamp(refl_dir.y * 0.5 + 0.5, 0.0, 1.0), 1.45);
+    var sky_refl = mix(vec3<f32>(0.09, 0.17, 0.30), vec3<f32>(0.76, 0.90, 1.0), sky_t);
+    let softbox = pow(clamp(dot(refl_dir, normalize(vec3<f32>(-0.20, 0.82, 0.38))), 0.0, 1.0), 14.0);
+    sky_refl += vec3<f32>(0.72, 0.84, 0.96) * softbox;
+    sky_refl *= mix(vec3<f32>(1.0), shallow, metallic);
+
+    let crest_foam = smoothstep(0.45, 0.95, speed_e) * smoothstep(0.04, 0.24, thickness)
+                   * 0.55 * fusion * u.deep.w * (1.0 - metallic);
+
+    let liquid_col = mix(shallow_water, sky_refl, clamp(fresnel * mix(0.45, 0.92, fusion), vec3<f32>(0.0), vec3<f32>(0.94)))
+                   + spec * fresnel
+                   + vec3<f32>(0.90, 0.97, 1.0) * crest_foam;
+
+    let solid_ball_col = (deep_tint + sky_refl * fresnel * 0.35) * crevice_ao + spec * 0.65;
+    return vec4<f32>(clamp(mix(solid_ball_col, liquid_col, smoothstep(0.0, 0.65, fusion)), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+`;

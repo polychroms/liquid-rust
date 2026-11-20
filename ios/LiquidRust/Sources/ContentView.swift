@@ -477,6 +477,15 @@ private struct LiquidGlassInspectorSheet: View {
                     }
                 }
 
+                Toggle("Smooth Liquid Surface (SSFR)", isOn: $cfg.liquidSurface)
+                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white)
+                    .tint(Color(red: 0.30, green: 0.80, blue: 1.0))
+
+                if cfg.liquidSurface {
+                    LiquidGlassSlider(label: "Liquid Fusion", value: $cfg.liquidFusion, range: 0.0...1.0, format: "%.2f")
+                }
+
                 Toggle("Fresnel Sky-Rim & Sun Specular", isOn: $cfg.litSpheres)
                     .font(.system(size: 13.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.white)
@@ -501,7 +510,7 @@ private struct LiquidGlassInspectorSheet: View {
                 LiquidGlassSlider(label: "Fresnel IOR", value: $cfg.ior, range: 1.01...2.50, format: "%.3f")
                 LiquidGlassSlider(label: "GGX Roughness", value: $cfg.roughness, range: 0.015...0.80, format: "%.3f")
                 LiquidGlassSlider(label: "Sun Specular", value: $cfg.specular, range: 0.0...3.0, format: "%.2f")
-                LiquidGlassSlider(label: "Subsurface Glow", value: $cfg.refraction, range: 0.0...1.2, format: "%.2f")
+                LiquidGlassSlider(label: "Refraction & Glow", value: $cfg.refraction, range: 0.0...1.2, format: "%.2f")
                 LiquidGlassSlider(label: "Metallic", value: $cfg.metallic, range: 0.0...1.0, format: "%.2f")
             }
         }

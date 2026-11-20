@@ -2442,6 +2442,24 @@ fn test_cli_copy_output_filename_customization_and_quoting() {
     assert!(app.copy_cli_use_render_tab);
 }
 
+#[test]
+fn test_ssfr_render_mode_slugs_and_fusion_defaults() {
+    use liquid_rust::render::{RenderMode, SurfaceMeshConfig};
+
+    assert_eq!(RenderMode::ALL.len(), 3);
+    assert_eq!(RenderMode::ScreenSpaceFluid.slug(), "ssfr");
+    assert_eq!(RenderMode::from_slug("ssfr"), RenderMode::ScreenSpaceFluid);
+    assert_eq!(RenderMode::from_slug("liquid"), RenderMode::ScreenSpaceFluid);
+    assert_eq!(RenderMode::from_slug("mesh"), RenderMode::SurfaceMesh);
+    assert_eq!(RenderMode::from_slug("particles"), RenderMode::Particles);
+
+    let cfg = SurfaceMeshConfig::default();
+    assert!((cfg.ssfr_fusion - 1.0).abs() < 1e-6);
+    assert!(cfg.refraction_strength > 0.0);
+    assert!(cfg.opacity < 0.98);
+}
+
+
 
 
 

@@ -15,7 +15,7 @@
         <div class="logo">
             <span class="logo-icon">🌊</span>
             <div class="logo-stack">
-                <span class="logo-title">LiquidRust <span class="studio-tag">STUDIO</span> <a class="version-tag" href="https://github.com/rappar222/liquid-rust/releases/tag/v0.3.11" target="_blank" rel="noopener" title="View Liquid Rust v0.3.11 Release">v0.3.11</a></span>
+                <span class="logo-title">LiquidRust <span class="studio-tag">STUDIO</span> <a class="version-tag" href="https://github.com/rappar222/liquid-rust/releases/tag/v0.4.0" target="_blank" rel="noopener" title="View Liquid Rust v0.4.0 Release">v0.4.0</a></span>
                 <small id="badge-backend" class="badge-backend webgpu">⚡ WebGPU</small>
             </div>
         </div>
@@ -248,6 +248,21 @@
 
                         <div class="checkbox-group">
                             <label>
+                                <input type="checkbox" id="check-ssfr" checked>
+                                <span>💧 Smooth Liquid Surface (SSFR)</span>
+                            </label>
+                        </div>
+
+                        <div class="slider-group" id="fusion-group">
+                            <div class="slider-label">
+                                <span>Liquid Fusion</span>
+                                <span id="val-mat-fusion" class="badge">Liquid</span>
+                            </div>
+                            <input type="range" id="mat-fusion" min="0" max="100" step="1" value="100">
+                        </div>
+
+                        <div class="checkbox-group">
+                            <label>
                                 <input type="checkbox" id="check-lit-spheres" checked>
                                 <span>Fresnel Sky-Rim &amp; Specular Lighting</span>
                             </label>
@@ -375,17 +390,17 @@
         <!-- Pinned OS-Aware Native App Download Card -->
         <div class="download-card">
             <div class="download-top">
-                <span class="download-title">🖥 Native App <span class="card-version-pill">v0.3.11</span></span>
+                <span class="download-title">🖥 Native App <span class="card-version-pill">v0.4.0</span></span>
                 <span id="download-os-label" class="os-pill">Detecting OS…</span>
             </div>
             <p class="download-desc">Full-speed Vulkan/Metal GPU solver + 3D surface-mesh CLI renderer.</p>
-            <a id="btn-download-app" class="btn-download" href="https://github.com/rappar222/liquid-rust/releases/tag/v0.3.11" target="_blank" rel="noopener">
-                ⬇ Download LiquidRust v0.3.11
+            <a id="btn-download-app" class="btn-download" href="https://github.com/rappar222/liquid-rust/releases/tag/v0.4.0" target="_blank" rel="noopener">
+                ⬇ Download LiquidRust v0.4.0
             </a>
             <div id="download-alt-links" class="download-alt-links"></div>
         </div>
     </aside>
 
-    <script type="module" src="js/app.js?v=20261114a"></script>
+    <script type="module" src="js/app.js?v=20261120a"></script>
 </body>
 </html>

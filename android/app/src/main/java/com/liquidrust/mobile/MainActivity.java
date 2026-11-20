@@ -1200,6 +1200,23 @@ public final class MainActivity extends Activity implements SensorEventListener,
         divLp.setMargins(0, dp(12), 0, dp(4));
         cardShade.addView(div, divLp);
 
+        addSwitchRow(cardShade, "Smooth Liquid Surface (SSFR)", "Fast 5-pass screen-space refractive fluid skin", true, checked -> {
+            cfg.liquidSurface = checked;
+        });
+
+        TextView tvFusionVal = new TextView(this);
+        addM3Slider(cardShade, "Liquid Fusion", "Liquid", tvFusionVal, 0, 100, 100, val -> {
+            float v = val / 100.0f;
+            cfg.liquidFusion = v;
+            if (val <= 1) {
+                tvFusionVal.setText("Balls");
+            } else if (val >= 99) {
+                tvFusionVal.setText("Liquid");
+            } else {
+                tvFusionVal.setText(String.format(Locale.US, "Coated %d%%", val));
+            }
+        });
+
         addSwitchRow(cardShade, "Specular & Sky Reflections", "Fresnel rim lighting and sun highlights", true, checked -> {
             cfg.litSpheres = checked;
         });
@@ -1269,7 +1286,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         });
 
         tvRefrVal = new TextView(this);
-        sbRefr = addM3Slider(cardOpt, "Subsurface Glow", "0.42", tvRefrVal, 0, 120, 42, val -> {
+        sbRefr = addM3Slider(cardOpt, "Refraction & Glow", "0.42", tvRefrVal, 0, 120, 42, val -> {
             if (suppressUiSync) return;
             float v = val / 100.0f;
             cfg.refraction = v;
