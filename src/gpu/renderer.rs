@@ -115,6 +115,7 @@ fn env_preset_id(preset: EnvironmentPreset) -> u32 {
         EnvironmentPreset::GoldenSunset => 2,
         EnvironmentPreset::ArcticLab => 3,
         EnvironmentPreset::AbyssalDeep => 4,
+        EnvironmentPreset::StudioLight => 5,
     }
 }
 
@@ -1284,12 +1285,21 @@ impl GpuRenderer {
             deep_srgb: [0.0, 0.0, 0.0, 0.05],
             mat_opt1: [1.0, 0.6, 0.45, 0.9],
             mat_opt2: [0.0, 0.35, 6.0, 0.3],
-            wire_color: [
-                78.0 / 255.0,
-                136.0 / 255.0,
-                205.0 / 255.0,
-                1.0 + self.ssaa_factor.saturating_sub(1) as f32 * 0.25,
-            ],
+            wire_color: if env_preset.is_light_backdrop() {
+                [
+                    28.0 / 255.0,
+                    92.0 / 255.0,
+                    174.0 / 255.0,
+                    1.0 + self.ssaa_factor.saturating_sub(1) as f32 * 0.25,
+                ]
+            } else {
+                [
+                    78.0 / 255.0,
+                    136.0 / 255.0,
+                    205.0 / 255.0,
+                    1.0 + self.ssaa_factor.saturating_sub(1) as f32 * 0.25,
+                ]
+            },
             dims: [
                 self.render_width as u32,
                 self.render_height as u32,

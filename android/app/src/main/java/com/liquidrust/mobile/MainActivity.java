@@ -3,6 +3,7 @@ package com.liquidrust.mobile;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -33,6 +34,7 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
@@ -59,30 +61,52 @@ import java.util.Locale;
  */
 public final class MainActivity extends Activity implements SensorEventListener, FluidRenderer.TelemetryListener {
 
-    // Material Design 3 Dark Color Tokens (Slate / Ocean Blue)
-    private static final int M3_BG                  = 0xFF0E141B;
-    private static final int M3_HUD_SURFACE         = 0xDC1A222D;
-    private static final int M3_DOCK_SURFACE        = 0xEB1A222D;
-    private static final int M3_SHEET_SURFACE       = 0xF7151C25;
-    private static final int M3_CARD_SURFACE        = 0xFF1E2733;
-    private static final int M3_TONAL_BTN           = 0xEB25303E;
-    private static final int M3_PRIMARY             = 0xFF8ECDFF;
-    private static final int M3_ON_PRIMARY          = 0xFF00344F;
-    private static final int M3_PRIMARY_CONTAINER   = 0xFF004B70;
-    private static final int M3_ON_PRIMARY_CONT     = 0xFFCBE6FF;
-    private static final int M3_ON_SURFACE          = 0xFFE2E8F0;
-    private static final int M3_ON_SURFACE_VAR      = 0xFF94A3B8;
-    private static final int M3_OUTLINE             = 0xFF384657;
-    private static final int M3_DIVIDER             = 0xFF263241;
-    private static final int M3_RIPPLE              = 0x36CBE6FF;
-    private static final int M3_DOT_GPU             = 0xFF4ADE80;
-    private static final int M3_DOT_CPU             = 0xFFFBBF24;
+    private static final String PREFS_NAME = "liquidrust_prefs";
+    private static final String PREF_LIGHT_THEME = "light_theme";
+
+    // Material Design 3 Dynamic Dark / Light Color Tokens (Slate / Ocean Blue)
+    private int M3_BG                  = 0xFF0E141B;
+    private int M3_HUD_SURFACE         = 0xDC1A222D;
+    private int M3_DOCK_SURFACE        = 0xEB1A222D;
+    private int M3_SHEET_SURFACE       = 0xF7151C25;
+    private int M3_CARD_SURFACE        = 0xFF1E2733;
+    private int M3_TONAL_BTN           = 0xEB25303E;
+    private int M3_PRIMARY             = 0xFF8ECDFF;
+    private int M3_ON_PRIMARY          = 0xFF00344F;
+    private int M3_PRIMARY_CONTAINER   = 0xFF004B70;
+    private int M3_ON_PRIMARY_CONT     = 0xFFCBE6FF;
+    private int M3_ON_SURFACE          = 0xFFE2E8F0;
+    private int M3_ON_SURFACE_VAR      = 0xFF94A3B8;
+    private int M3_OUTLINE             = 0xFF384657;
+    private int M3_DIVIDER             = 0xFF263241;
+    private int M3_RIPPLE              = 0x36CBE6FF;
+    private int M3_DOT_GPU             = 0xFF4ADE80;
+    private int M3_DOT_CPU             = 0xFFFBBF24;
+    private int M3_SHEET_STROKE        = 0x22CBE6FF;
+    private int M3_HANDLE_COLOR        = 0xFF64748B;
+    private int M3_SCRIM               = 0xA805080D;
+    private int M3_MODAL_BORDER        = 0x38CBE6FF;
+    private int M3_MODAL_NOTES_BG      = 0xFF0E141C;
+    private int M3_MODAL_NOTES_FG      = 0xFFCBD5E1;
+    private int M3_TRACK_BG            = 0xFF263342;
+    private int M3_SLIDER_TRACK        = 0xFF334155;
+    private int M3_SWITCH_OFF_TRACK    = 0xFF25303E;
+    private int M3_SWITCH_OFF_OUTLINE  = 0xFF64748B;
+    private int M3_SWITCH_OFF_THUMB    = 0xFF94A3B8;
+    private int M3_UPD_PILL_BG         = 0xFF134E3A;
+    private int M3_UPD_PILL_STROKE     = 0xFF34D399;
+    private int M3_UPD_PILL_FG         = 0xFFD1FAE5;
 
     private static final Typeface TF_MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
     private static final Typeface TF_REGULAR = Typeface.create("sans-serif", Typeface.NORMAL);
 
     private SimulationConfig cfg;
     private FluidSurfaceView glView;
+    private FrameLayout rootView;
+    private View topOverlayView;
+    private int currentSheetTab = 0;
+    private boolean lastGpuComputeState = true;
+    private float lastKernelHVal = 0.057f;
 
     private SensorManager sensorManager;
     private Sensor gravitySensor;
@@ -105,6 +129,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
     private FrameLayout btnTopTilt;
     private MaterialIconDrawable iconTopTilt;
+
+    private FrameLayout btnTopTheme;
+    private MaterialIconDrawable iconTopTheme;
+    private M3Switch swLightTheme;
 
     private LinearLayout btnTopUpdate;
     private TextView tvTopUpdate;
@@ -191,6 +219,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         cfg = new SimulationConfig();
         cfg.isPortrait = (getResources().getConfiguration().orientation != Configuration.ORIENTATION_LANDSCAPE);
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        cfg.lightTheme = prefs.getBoolean(PREF_LIGHT_THEME, false);
+        applyPalette(cfg.lightTheme);
+
         glView = new FluidSurfaceView(this, cfg, this);
 
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
@@ -201,59 +233,25 @@ public final class MainActivity extends Activity implements SensorEventListener,
             }
         }
 
-        FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(M3_BG);
-        root.addView(glView, new FrameLayout.LayoutParams(
+        rootView = new FrameLayout(this);
+        rootView.setBackgroundColor(M3_BG);
+        rootView.addView(glView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        View topOverlay = buildTopOverlay();
-        bottomDock = buildBottomThumbDock();
-        bottomSheet = buildMaterialBottomSheet();
+        mountUiChrome(false, false);
 
-        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP
-        );
-        topLp.setMargins(dp(16), dp(12), dp(16), 0);
-        root.addView(topOverlay, topLp);
-
-        FrameLayout.LayoutParams dockLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM
-        );
-        dockLp.setMargins(dp(16), 0, dp(16), dp(16));
-        root.addView(bottomDock, dockLp);
-
-        FrameLayout.LayoutParams sheetLp = createBottomSheetLayoutParams(getResources().getConfiguration());
-        root.addView(bottomSheet, sheetLp);
-
-        updateModalScrim = buildUpdateModalScrim();
-        root.addView(updateModalScrim, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        root.setOnApplyWindowInsetsListener((v, insets) -> {
+        rootView.setOnApplyWindowInsetsListener((v, insets) -> {
             safeTopInset = insets.getSystemWindowInsetTop();
             safeBottomInset = insets.getSystemWindowInsetBottom();
-
-            topLp.topMargin = Math.max(dp(10), safeTopInset + dp(8));
-            dockLp.bottomMargin = Math.max(dp(14), safeBottomInset + dp(12));
-            topOverlay.setLayoutParams(topLp);
-            bottomDock.setLayoutParams(dockLp);
-
-            if (sheetScrollView != null) {
-                sheetScrollView.setPadding(dp(16), dp(8), dp(16), Math.max(dp(20), safeBottomInset + dp(18)));
-            }
+            applySafeInsetsMargins();
             return insets;
         });
 
         registerPredictiveBackHandler();
-        setContentView(root);
+        setContentView(rootView);
+        applySystemBarAppearance(cfg.lightTheme);
 
         appUpdater.setInstallErrorListener(err -> {
             isUpdateBusy = false;
@@ -273,6 +271,196 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         // Silent non-blocking GitHub Release check after OpenGL ES shaders finish warming up
         uiHandler.postDelayed(() -> triggerUpdateCheck(false), 1200L);
+    }
+
+    private void applyPalette(boolean light) {
+        if (light) {
+            M3_BG                  = 0xFFE8EEF6;
+            M3_HUD_SURFACE         = 0xEAFFFFFF;
+            M3_DOCK_SURFACE        = 0xF2F7FAFE;
+            M3_SHEET_SURFACE       = 0xFAFFFFFF;
+            M3_CARD_SURFACE        = 0xFFEFF4FA;
+            M3_TONAL_BTN           = 0xFFE2EBF5;
+            M3_PRIMARY             = 0xFF0A66C2;
+            M3_ON_PRIMARY          = 0xFFFFFFFF;
+            M3_PRIMARY_CONTAINER   = 0xFFD0E4FF;
+            M3_ON_PRIMARY_CONT     = 0xFF00325A;
+            M3_ON_SURFACE          = 0xFF141D28;
+            M3_ON_SURFACE_VAR      = 0xFF52637A;
+            M3_OUTLINE             = 0xFFBCC7D6;
+            M3_DIVIDER             = 0xFFD9E2EC;
+            M3_RIPPLE              = 0x240A66C2;
+            M3_DOT_GPU             = 0xFF16A34A;
+            M3_DOT_CPU             = 0xFFD97706;
+            M3_SHEET_STROKE        = 0x2212427A;
+            M3_HANDLE_COLOR        = 0xFF94A3B8;
+            M3_SCRIM               = 0x660F172A;
+            M3_MODAL_BORDER        = 0x2412427A;
+            M3_MODAL_NOTES_BG      = 0xFFF1F5F9;
+            M3_MODAL_NOTES_FG      = 0xFF334155;
+            M3_TRACK_BG            = 0xFFD8E2EE;
+            M3_SLIDER_TRACK        = 0xFFCBD5E1;
+            M3_SWITCH_OFF_TRACK    = 0xFFD4DEE9;
+            M3_SWITCH_OFF_OUTLINE  = 0xFF7B8C9F;
+            M3_SWITCH_OFF_THUMB    = 0xFF52637A;
+            M3_UPD_PILL_BG         = 0xFFD1FAE5;
+            M3_UPD_PILL_STROKE     = 0xFF10B981;
+            M3_UPD_PILL_FG         = 0xFF065F46;
+        } else {
+            M3_BG                  = 0xFF0E141B;
+            M3_HUD_SURFACE         = 0xDC1A222D;
+            M3_DOCK_SURFACE        = 0xEB1A222D;
+            M3_SHEET_SURFACE       = 0xF7151C25;
+            M3_CARD_SURFACE        = 0xFF1E2733;
+            M3_TONAL_BTN           = 0xEB25303E;
+            M3_PRIMARY             = 0xFF8ECDFF;
+            M3_ON_PRIMARY          = 0xFF00344F;
+            M3_PRIMARY_CONTAINER   = 0xFF004B70;
+            M3_ON_PRIMARY_CONT     = 0xFFCBE6FF;
+            M3_ON_SURFACE          = 0xFFE2E8F0;
+            M3_ON_SURFACE_VAR      = 0xFF94A3B8;
+            M3_OUTLINE             = 0xFF384657;
+            M3_DIVIDER             = 0xFF263241;
+            M3_RIPPLE              = 0x36CBE6FF;
+            M3_DOT_GPU             = 0xFF4ADE80;
+            M3_DOT_CPU             = 0xFFFBBF24;
+            M3_SHEET_STROKE        = 0x22CBE6FF;
+            M3_HANDLE_COLOR        = 0xFF64748B;
+            M3_SCRIM               = 0xA805080D;
+            M3_MODAL_BORDER        = 0x38CBE6FF;
+            M3_MODAL_NOTES_BG      = 0xFF0E141C;
+            M3_MODAL_NOTES_FG      = 0xFFCBD5E1;
+            M3_TRACK_BG            = 0xFF263342;
+            M3_SLIDER_TRACK        = 0xFF334155;
+            M3_SWITCH_OFF_TRACK    = 0xFF25303E;
+            M3_SWITCH_OFF_OUTLINE  = 0xFF64748B;
+            M3_SWITCH_OFF_THUMB    = 0xFF94A3B8;
+            M3_UPD_PILL_BG         = 0xFF134E3A;
+            M3_UPD_PILL_STROKE     = 0xFF34D399;
+            M3_UPD_PILL_FG         = 0xFFD1FAE5;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applySystemBarAppearance(boolean light) {
+        Window window = getWindow();
+        if (window == null) return;
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController wic = window.getInsetsController();
+            if (wic != null) {
+                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                         | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                wic.setSystemBarsAppearance(light ? mask : 0, mask);
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && window.getDecorView() != null) {
+            int flags = window.getDecorView().getSystemUiVisibility();
+            if (light) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            window.getDecorView().setSystemUiVisibility(flags);
+        }
+    }
+
+    private void applySafeInsetsMargins() {
+        if (topOverlayView != null && topOverlayView.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams topLp = (FrameLayout.LayoutParams) topOverlayView.getLayoutParams();
+            topLp.topMargin = Math.max(dp(10), safeTopInset + dp(8));
+            topOverlayView.setLayoutParams(topLp);
+        }
+        if (bottomDock != null && bottomDock.getLayoutParams() instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams dockLp = (FrameLayout.LayoutParams) bottomDock.getLayoutParams();
+            dockLp.bottomMargin = Math.max(dp(14), safeBottomInset + dp(12));
+            bottomDock.setLayoutParams(dockLp);
+        }
+        if (sheetScrollView != null) {
+            sheetScrollView.setPadding(dp(16), dp(8), dp(16), Math.max(dp(20), safeBottomInset + dp(18)));
+        }
+    }
+
+    private void mountUiChrome(boolean preserveSheetOpen, boolean preserveUpdateModalOpen) {
+        if (topOverlayView != null) rootView.removeView(topOverlayView);
+        if (bottomDock != null) rootView.removeView(bottomDock);
+        if (bottomSheet != null) rootView.removeView(bottomSheet);
+        if (updateModalScrim != null) rootView.removeView(updateModalScrim);
+
+        topOverlayView = buildTopOverlay();
+        bottomDock = buildBottomThumbDock();
+        bottomSheet = buildMaterialBottomSheet();
+        updateModalScrim = buildUpdateModalScrim();
+
+        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP
+        );
+        topLp.setMargins(dp(16), Math.max(dp(10), safeTopInset + dp(8)), dp(16), 0);
+        rootView.addView(topOverlayView, topLp);
+
+        FrameLayout.LayoutParams dockLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM
+        );
+        dockLp.setMargins(dp(16), 0, dp(16), Math.max(dp(14), safeBottomInset + dp(12)));
+        rootView.addView(bottomDock, dockLp);
+
+        FrameLayout.LayoutParams sheetLp = createBottomSheetLayoutParams(getResources().getConfiguration());
+        rootView.addView(bottomSheet, sheetLp);
+
+        rootView.addView(updateModalScrim, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        selectSheetTab(currentSheetTab);
+        applySafeInsetsMargins();
+        if (statusDotView != null) {
+            statusDotView.setBackground(circleDrawable(lastGpuComputeState ? M3_DOT_GPU : M3_DOT_CPU));
+        }
+        if (tvKernelInfo != null) {
+            tvKernelInfo.setText(String.format(Locale.US, "Smoothing radius h: %.3f m", lastKernelHVal));
+        }
+        refreshStatusText();
+
+        if (latestReleaseInfo != null && latestReleaseInfo.isNewer && btnTopUpdate != null && tvTopUpdate != null) {
+            tvTopUpdate.setText(latestReleaseInfo.tagName);
+            btnTopUpdate.setVisibility(View.VISIBLE);
+        }
+        if (preserveSheetOpen) {
+            isSheetOpen = true;
+            bottomSheet.setVisibility(View.VISIBLE);
+            bottomSheet.setTranslationY(0f);
+            bottomDock.setVisibility(View.INVISIBLE);
+            bottomDock.setAlpha(0f);
+        }
+        if (preserveUpdateModalOpen && latestReleaseInfo != null) {
+            isUpdateModalOpen = true;
+            populateModalForRelease(latestReleaseInfo);
+            updateModalScrim.setVisibility(View.VISIBLE);
+            updateModalScrim.setAlpha(1f);
+        }
+        updateBackCallbackState();
+    }
+
+    private void toggleTheme(boolean light) {
+        if (cfg.lightTheme == light) return;
+        cfg.lightTheme = light;
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_LIGHT_THEME, light)
+            .apply();
+        applyPalette(light);
+        if (rootView != null) {
+            rootView.setBackgroundColor(M3_BG);
+        }
+        applySystemBarAppearance(light);
+        mountUiChrome(isSheetOpen, isUpdateModalOpen);
     }
 
     private void registerPredictiveBackHandler() {
@@ -403,33 +591,34 @@ public final class MainActivity extends Activity implements SensorEventListener,
         tvStatusText.setSingleLine(true);
         tvStatusText.setMaxLines(1);
         tvStatusText.setEllipsize(TextUtils.TruncateAt.END);
-        tvStatusText.setMaxWidth(dp(185));
+        tvStatusText.setMaxWidth(showDetailedStats ? dp(155) : dp(125));
         statusPill.addView(tvStatusText);
 
         statusPill.setOnClickListener(v -> {
             hapticTick(v);
             showDetailedStats = !showDetailedStats;
-            tvStatusText.setMaxWidth(showDetailedStats ? dp(215) : dp(165));
+            tvStatusText.setMaxWidth(showDetailedStats ? dp(155) : dp(125));
             refreshStatusText();
         });
         row.addView(statusPill);
 
         // Flexible spacer
         View spacer = new View(this);
+        spacer.setMinimumWidth(dp(6));
         row.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1.0f));
 
-        // Right Cluster: [Update Pill (when available)]  [2D/3D Pill]  [Tilt Circle]  [Reset Circle]
+        // Right Cluster: [Update Pill (when available)]  [2D/3D Pill]  [Theme Circle]  [Tilt Circle]  [Reset Circle]
         btnTopUpdate = new LinearLayout(this);
         btnTopUpdate.setOrientation(LinearLayout.HORIZONTAL);
         btnTopUpdate.setGravity(Gravity.CENTER);
         btnTopUpdate.setMinimumHeight(dp(38));
         btnTopUpdate.setPadding(dp(11), 0, dp(12), 0);
         btnTopUpdate.setElevation(dp(5));
-        btnTopUpdate.setBackground(ripplePill(0xFF134E3A, 0xFF34D399, dp(19)));
+        btnTopUpdate.setBackground(ripplePill(M3_UPD_PILL_BG, M3_UPD_PILL_STROKE, dp(19)));
         btnTopUpdate.setVisibility(View.GONE);
 
         MaterialIconDrawable iconTopUpd = new MaterialIconDrawable(
-            MaterialIconDrawable.ICON_UPDATE, 0xFFA7F3D0, dp(16));
+            MaterialIconDrawable.ICON_UPDATE, M3_UPD_PILL_FG, dp(16));
         ImageView ivUpd = new ImageView(this);
         ivUpd.setImageDrawable(iconTopUpd);
         LinearLayout.LayoutParams ivUpdLp = new LinearLayout.LayoutParams(dp(16), dp(16));
@@ -438,7 +627,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         tvTopUpdate = new TextView(this);
         tvTopUpdate.setText("Update");
-        tvTopUpdate.setTextColor(0xFFD1FAE5);
+        tvTopUpdate.setTextColor(M3_UPD_PILL_FG);
         tvTopUpdate.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         tvTopUpdate.setTypeface(TF_MEDIUM);
         tvTopUpdate.setSingleLine(true);
@@ -454,29 +643,33 @@ public final class MainActivity extends Activity implements SensorEventListener,
             }
         });
         LinearLayout.LayoutParams updTopLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
-        updTopLp.rightMargin = dp(8);
+            ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
+        updTopLp.rightMargin = dp(6);
         row.addView(btnTopUpdate, updTopLp);
 
         btnTopDimension = new LinearLayout(this);
         btnTopDimension.setOrientation(LinearLayout.HORIZONTAL);
         btnTopDimension.setGravity(Gravity.CENTER);
-        btnTopDimension.setMinimumHeight(dp(38));
-        btnTopDimension.setPadding(dp(12), 0, dp(13), 0);
+        btnTopDimension.setMinimumHeight(dp(36));
+        btnTopDimension.setPadding(dp(10), 0, dp(11), 0);
         btnTopDimension.setElevation(dp(4));
-        btnTopDimension.setBackground(ripplePill(M3_HUD_SURFACE, 0, dp(19)));
+        btnTopDimension.setBackground(ripplePill(M3_HUD_SURFACE, 0, dp(18)));
 
-        iconTopDimension = new MaterialIconDrawable(MaterialIconDrawable.ICON_MODE_2D, M3_ON_SURFACE, dp(17));
+        iconTopDimension = new MaterialIconDrawable(
+            cfg.is2D ? MaterialIconDrawable.ICON_MODE_2D : MaterialIconDrawable.ICON_MODE_3D,
+            M3_ON_SURFACE,
+            dp(16)
+        );
         ImageView ivDim = new ImageView(this);
         ivDim.setImageDrawable(iconTopDimension);
-        LinearLayout.LayoutParams ivDimLp = new LinearLayout.LayoutParams(dp(17), dp(17));
-        ivDimLp.rightMargin = dp(5);
+        LinearLayout.LayoutParams ivDimLp = new LinearLayout.LayoutParams(dp(16), dp(16));
+        ivDimLp.rightMargin = dp(4);
         btnTopDimension.addView(ivDim, ivDimLp);
 
         tvTopDimension = new TextView(this);
-        tvTopDimension.setText("2D");
+        tvTopDimension.setText(cfg.is2D ? "2D" : "3D");
         tvTopDimension.setTextColor(M3_ON_SURFACE);
-        tvTopDimension.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        tvTopDimension.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         tvTopDimension.setTypeface(TF_MEDIUM);
         tvTopDimension.setSingleLine(true);
         btnTopDimension.addView(tvTopDimension);
@@ -486,26 +679,49 @@ public final class MainActivity extends Activity implements SensorEventListener,
             applyDimensionMode(!cfg.is2D);
         });
         row.addView(btnTopDimension, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+            ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+
+        // Theme Circle Toggle (Dark <-> Light)
+        iconTopTheme = new MaterialIconDrawable(
+            cfg.lightTheme ? MaterialIconDrawable.ICON_MOON : MaterialIconDrawable.ICON_SUN,
+            M3_ON_SURFACE,
+            dp(18)
+        );
+        btnTopTheme = makeCircleIconButton(iconTopTheme, dp(36), M3_HUD_SURFACE, v -> {
+            hapticTick(v);
+            toggleTheme(!cfg.lightTheme);
+        });
+        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        themeLp.leftMargin = dp(6);
+        row.addView(btnTopTheme, themeLp);
 
         // Tilt Sensor Circle Toggle
-        iconTopTilt = new MaterialIconDrawable(MaterialIconDrawable.ICON_TILT, M3_ON_SURFACE, dp(20));
-        btnTopTilt = makeCircleIconButton(iconTopTilt, dp(38), M3_HUD_SURFACE, v -> {
-            hapticTick(v);
-            applyTiltGravity(!cfg.tiltGravityEnabled);
-        });
-        LinearLayout.LayoutParams tiltLp = new LinearLayout.LayoutParams(dp(38), dp(38));
-        tiltLp.leftMargin = dp(8);
+        iconTopTilt = new MaterialIconDrawable(
+            MaterialIconDrawable.ICON_TILT,
+            cfg.tiltGravityEnabled ? M3_ON_PRIMARY_CONT : M3_ON_SURFACE,
+            dp(19)
+        );
+        btnTopTilt = makeCircleIconButton(
+            iconTopTilt,
+            dp(36),
+            cfg.tiltGravityEnabled ? M3_PRIMARY_CONTAINER : M3_HUD_SURFACE,
+            v -> {
+                hapticTick(v);
+                applyTiltGravity(!cfg.tiltGravityEnabled);
+            }
+        );
+        LinearLayout.LayoutParams tiltLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        tiltLp.leftMargin = dp(6);
         row.addView(btnTopTilt, tiltLp);
 
         // Reset Circle Button
-        MaterialIconDrawable iconReset = new MaterialIconDrawable(MaterialIconDrawable.ICON_RESET, M3_ON_SURFACE, dp(20));
-        FrameLayout btnReset = makeCircleIconButton(iconReset, dp(38), M3_HUD_SURFACE, v -> {
+        MaterialIconDrawable iconReset = new MaterialIconDrawable(MaterialIconDrawable.ICON_RESET, M3_ON_SURFACE, dp(19));
+        FrameLayout btnReset = makeCircleIconButton(iconReset, dp(36), M3_HUD_SURFACE, v -> {
             hapticClick(v);
             cfg.reloadSceneRequested.set(true);
         });
-        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(dp(38), dp(38));
-        resetLp.leftMargin = dp(8);
+        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        resetLp.leftMargin = dp(6);
         row.addView(btnReset, resetLp);
 
         return row;
@@ -529,9 +745,9 @@ public final class MainActivity extends Activity implements SensorEventListener,
         segContainer.setElevation(dp(8));
         segContainer.setBackground(roundRect(M3_DOCK_SURFACE, M3_DIVIDER, dp(27)));
 
-        segPull = new SegmentView(MaterialIconDrawable.ICON_PULL, "Pull", true, () -> selectTouchTool(SimulationConfig.TOOL_ATTRACT));
-        segPush = new SegmentView(MaterialIconDrawable.ICON_PUSH, "Push", false, () -> selectTouchTool(SimulationConfig.TOOL_REPEL));
-        segOrbit = new SegmentView(MaterialIconDrawable.ICON_ORBIT, "Orbit", false, () -> selectTouchTool(SimulationConfig.TOOL_CAMERA));
+        segPull = new SegmentView(MaterialIconDrawable.ICON_PULL, "Pull", cfg.touchTool == SimulationConfig.TOOL_ATTRACT, () -> selectTouchTool(SimulationConfig.TOOL_ATTRACT));
+        segPush = new SegmentView(MaterialIconDrawable.ICON_PUSH, "Push", cfg.touchTool == SimulationConfig.TOOL_REPEL, () -> selectTouchTool(SimulationConfig.TOOL_REPEL));
+        segOrbit = new SegmentView(MaterialIconDrawable.ICON_ORBIT, "Orbit", cfg.touchTool == SimulationConfig.TOOL_CAMERA, () -> selectTouchTool(SimulationConfig.TOOL_CAMERA));
 
         segContainer.addView(segPull, new LinearLayout.LayoutParams(0, dp(46), 1.0f));
         segContainer.addView(segPush, new LinearLayout.LayoutParams(0, dp(46), 1.0f));
@@ -557,7 +773,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         ImageView ivFab = new ImageView(this);
         ivFab.setImageDrawable(iconFabPlay);
         fabPlayPause.addView(ivFab, new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER));
-        stylePlayFab(true);
+        stylePlayFab(cfg.isPlaying);
 
         fabPlayPause.setOnClickListener(v -> {
             hapticClick(v);
@@ -633,7 +849,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         bg.setColor(M3_SHEET_SURFACE);
         float r = dp(28);
         bg.setCornerRadii(new float[]{ r, r, r, r, 0f, 0f, 0f, 0f });
-        bg.setStroke(dp(1), 0x22CBE6FF);
+        bg.setStroke(dp(1), M3_SHEET_STROKE);
         sheet.setBackground(bg);
         sheet.setVisibility(View.GONE);
 
@@ -644,7 +860,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         // M3 Drag Handle Pill (36dp x 4dp)
         View handle = new View(this);
-        handle.setBackground(roundRect(0xFF64748B, 0, dp(2)));
+        handle.setBackground(roundRect(M3_HANDLE_COLOR, 0, dp(2)));
         LinearLayout.LayoutParams handleLp = new LinearLayout.LayoutParams(dp(36), dp(4));
         handleLp.gravity = Gravity.CENTER_HORIZONTAL;
         handleLp.bottomMargin = dp(10);
@@ -866,6 +1082,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
     }
 
     private void selectSheetTab(int idx) {
+        currentSheetTab = idx;
         tabScene.setActive(idx == 0);
         tabPhysics.setActive(idx == 1);
         tabAppearance.setActive(idx == 2);
@@ -891,7 +1108,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         LinearLayout presetRow = makeChipStrip(col);
         for (int i = 0; i < SimulationConfig.PRESET_NAMES.length; i++) {
             final int idx = i;
-            presetChips[i] = new FilterChipView(SimulationConfig.PRESET_NAMES[i], i == 0, () -> {
+            presetChips[i] = new FilterChipView(SimulationConfig.PRESET_NAMES[i], i == cfg.preset, () -> {
                 selectPresetChip(idx);
             });
             presetRow.addView(presetChips[i], chipMargin(i));
@@ -903,8 +1120,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         LinearLayout dimRow = new LinearLayout(this);
         dimRow.setOrientation(LinearLayout.HORIZONTAL);
-        chipDim2D = new FilterChipView("2D Planar", true, () -> applyDimensionMode(true));
-        chipDim3D = new FilterChipView("3D Volumetric", false, () -> applyDimensionMode(false));
+        chipDim2D = new FilterChipView("2D Planar", cfg.is2D, () -> applyDimensionMode(true));
+        chipDim3D = new FilterChipView("3D Volumetric", !cfg.is2D, () -> applyDimensionMode(false));
         dimRow.addView(chipDim2D, chipMargin(0));
         dimRow.addView(chipDim3D, chipMargin(1));
         cardSim.addView(dimRow);
@@ -917,7 +1134,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         LinearLayout qualRow = makeChipStrip(cardSim);
         for (int i = 0; i < SimulationConfig.QUALITY_NAMES.length; i++) {
             final int idx = i;
-            qualityChips[i] = new FilterChipView(SimulationConfig.QUALITY_NAMES[i], i == 0, () -> {
+            qualityChips[i] = new FilterChipView(SimulationConfig.QUALITY_NAMES[i], i == cfg.quality, () -> {
                 cfg.quality = idx;
                 for (int k = 0; k < qualityChips.length; k++) {
                     qualityChips[k].setCheckedState(k == idx);
@@ -927,7 +1144,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             qualRow.addView(qualityChips[i], chipMargin(i));
         }
 
-        tvKernelInfo = makeSubtleLabel("Smoothing radius h: 0.057 m");
+        tvKernelInfo = makeSubtleLabel(String.format(Locale.US, "Smoothing radius h: %.3f m", lastKernelHVal));
         tvKernelInfo.setPadding(0, dp(8), 0, 0);
         cardSim.addView(tvKernelInfo);
         col.addView(cardSim, cardTopGap());
@@ -938,16 +1155,17 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         LinearLayout speedChips = new LinearLayout(this);
         speedChips.setOrientation(LinearLayout.HORIZONTAL);
-        chipSpeedSlow = new FilterChipView("0.25× Slow", false, () -> applySpeedPreset(0.25f));
-        chipSpeedSmooth = new FilterChipView("0.5× Smooth", false, () -> applySpeedPreset(0.50f));
-        chipSpeedReal = new FilterChipView("1.0× Real", true, () -> applySpeedPreset(1.00f));
+        chipSpeedSlow = new FilterChipView("0.25× Slow", Math.abs(cfg.simSpeed - 0.25f) < 0.02f, () -> applySpeedPreset(0.25f));
+        chipSpeedSmooth = new FilterChipView("0.5× Smooth", Math.abs(cfg.simSpeed - 0.50f) < 0.02f, () -> applySpeedPreset(0.50f));
+        chipSpeedReal = new FilterChipView("1.0× Real", Math.abs(cfg.simSpeed - 1.00f) < 0.02f, () -> applySpeedPreset(1.00f));
         speedChips.addView(chipSpeedSlow, chipMargin(0));
         speedChips.addView(chipSpeedSmooth, chipMargin(1));
         speedChips.addView(chipSpeedReal, chipMargin(2));
         cardSpeed.addView(speedChips);
 
         tvSpeedBadge = new TextView(this);
-        sbSpeed = addM3Slider(cardSpeed, "Playback Speed", "1.00×", tvSpeedBadge, 5, 200, 100, val -> {
+        int initSpeedPct = Math.max(5, Math.min(200, Math.round(cfg.simSpeed * 100.0f)));
+        sbSpeed = addM3Slider(cardSpeed, "Playback Speed", String.format(Locale.US, "%.2f×", cfg.simSpeed), tvSpeedBadge, 5, 200, initSpeedPct, val -> {
             float s = val / 100.0f;
             cfg.simSpeed = s;
             tvSpeedBadge.setText(String.format(Locale.US, "%.2f×", s));
@@ -961,29 +1179,32 @@ public final class MainActivity extends Activity implements SensorEventListener,
         LinearLayout cardObs = makeM3Card();
         obstacleSlidersWrap = new LinearLayout(this);
         obstacleSlidersWrap.setOrientation(LinearLayout.VERTICAL);
-        obstacleSlidersWrap.setVisibility(View.GONE);
+        obstacleSlidersWrap.setVisibility(cfg.obstacleEnabled ? View.VISIBLE : View.GONE);
 
-        swObstacle = addSwitchRow(cardObs, "Sphere Collider", "Solid interactive obstacle inside tank", false, checked -> {
+        swObstacle = addSwitchRow(cardObs, "Sphere Collider", "Solid interactive obstacle inside tank", cfg.obstacleEnabled, checked -> {
             cfg.obstacleEnabled = checked;
             obstacleSlidersWrap.setVisibility(checked ? View.VISIBLE : View.GONE);
         });
 
         TextView tvOx = new TextView(this);
-        addM3Slider(obstacleSlidersWrap, "Horizontal X", "0.00 m", tvOx, 0, 110, 55, val -> {
+        int initOx = Math.max(0, Math.min(110, Math.round(cfg.obstacleX * 100.0f) + 55));
+        addM3Slider(obstacleSlidersWrap, "Horizontal X", String.format(Locale.US, "%.2f m", cfg.obstacleX), tvOx, 0, 110, initOx, val -> {
             float x = (val - 55) / 100.0f;
             cfg.obstacleX = x;
             tvOx.setText(String.format(Locale.US, "%.2f m", x));
         });
 
         TextView tvOy = new TextView(this);
-        addM3Slider(obstacleSlidersWrap, "Vertical Y", "0.45 m", tvOy, 15, 140, 45, val -> {
+        int initOy = Math.max(15, Math.min(140, Math.round(cfg.obstacleY * 100.0f)));
+        addM3Slider(obstacleSlidersWrap, "Vertical Y", String.format(Locale.US, "%.2f m", cfg.obstacleY), tvOy, 15, 140, initOy, val -> {
             float y = val / 100.0f;
             cfg.obstacleY = y;
             tvOy.setText(String.format(Locale.US, "%.2f m", y));
         });
 
         TextView tvOr = new TextView(this);
-        addM3Slider(obstacleSlidersWrap, "Radius", "0.20 m", tvOr, 8, 40, 20, val -> {
+        int initOr = Math.max(8, Math.min(40, Math.round(cfg.obstacleR * 100.0f)));
+        addM3Slider(obstacleSlidersWrap, "Radius", String.format(Locale.US, "%.2f m", cfg.obstacleR), tvOr, 8, 40, initOr, val -> {
             float r = val / 100.0f;
             cfg.obstacleR = r;
             tvOr.setText(String.format(Locale.US, "%.2f m", r));
@@ -1096,28 +1317,32 @@ public final class MainActivity extends Activity implements SensorEventListener,
         addCardTitle(cardDyn, "Fluid Solver Parameters");
 
         TextView tvVort = new TextView(this);
-        addM3Slider(cardDyn, "Vorticity Swirl", "0.045", tvVort, 0, 180, 45, val -> {
+        int initVort = Math.max(0, Math.min(180, Math.round(cfg.vorticity * 1000.0f)));
+        addM3Slider(cardDyn, "Vorticity Swirl", String.format(Locale.US, "%.3f", cfg.vorticity), tvVort, 0, 180, initVort, val -> {
             float v = val / 1000.0f;
             cfg.vorticity = v;
             tvVort.setText(String.format(Locale.US, "%.3f", v));
         });
 
         TextView tvCoh = new TextView(this);
-        addM3Slider(cardDyn, "Surface Cohesion", "0.030", tvCoh, 0, 150, 30, val -> {
+        int initCoh = Math.max(0, Math.min(150, Math.round(cfg.surfaceTension * 1000.0f)));
+        addM3Slider(cardDyn, "Surface Cohesion", String.format(Locale.US, "%.3f", cfg.surfaceTension), tvCoh, 0, 150, initCoh, val -> {
             float c = val / 1000.0f;
             cfg.surfaceTension = c;
             tvCoh.setText(String.format(Locale.US, "%.3f", c));
         });
 
         TextView tvVisc = new TextView(this);
-        addM3Slider(cardDyn, "Viscosity", "0.035", tvVisc, 0, 300, 35, val -> {
+        int initVisc = Math.max(0, Math.min(300, Math.round(cfg.viscosity * 1000.0f)));
+        addM3Slider(cardDyn, "Viscosity", String.format(Locale.US, "%.3f", cfg.viscosity), tvVisc, 0, 300, initVisc, val -> {
             float v = val / 1000.0f;
             cfg.viscosity = v;
             tvVisc.setText(String.format(Locale.US, "%.3f", v));
         });
 
         tvGravityBadge = new TextView(this);
-        sbGravity = addM3Slider(cardDyn, "Gravity Strength", "9.8 m/s²", tvGravityBadge, 0, 250, 98, val -> {
+        int initGrav = Math.max(0, Math.min(250, Math.round(cfg.gravityMag * 10.0f)));
+        sbGravity = addM3Slider(cardDyn, "Gravity Strength", String.format(Locale.US, "%.1f m/s²", cfg.gravityMag), tvGravityBadge, 0, 250, initGrav, val -> {
             float g = val / 10.0f;
             cfg.gravityMag = g;
             tvGravityBadge.setText(String.format(Locale.US, "%.1f m/s²", g));
@@ -1134,14 +1359,27 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private LinearLayout buildAppearancePane() {
         LinearLayout col = makePaneColumn();
 
+        // Card 0: Studio Theme (Light / Dark)
+        LinearLayout cardTheme = makeM3Card();
+        swLightTheme = addSwitchRow(cardTheme,
+            "Light Theme",
+            "Bright studio backdrop and light Material 3 interface",
+            cfg.lightTheme,
+            checked -> uiHandler.postDelayed(() -> toggleTheme(checked), 110L));
+        col.addView(cardTheme);
+
         // Liquid Material Swatches
-        addSectionHeader(col, "Liquid Material");
+        LinearLayout matSectionLblWrap = new LinearLayout(this);
+        matSectionLblWrap.setOrientation(LinearLayout.VERTICAL);
+        matSectionLblWrap.setPadding(0, dp(10), 0, 0);
+        addSectionHeader(matSectionLblWrap, "Liquid Material");
+        col.addView(matSectionLblWrap);
         LinearLayout swatchRow = makeChipStrip(col);
         materialSwatchChips = new SwatchChipView[SimulationConfig.MATERIALS.length];
         for (int i = 0; i < SimulationConfig.MATERIALS.length; i++) {
             final int idx = i;
             SimulationConfig.MaterialPreset m = SimulationConfig.MATERIALS[i];
-            materialSwatchChips[i] = new SwatchChipView(m.name, m.shallowColor, m.deepColor, i == 0, () -> {
+            materialSwatchChips[i] = new SwatchChipView(m.name, m.shallowColor, m.deepColor, i == cfg.materialIndex, () -> {
                 for (int k = 0; k < materialSwatchChips.length; k++) {
                     materialSwatchChips[k].setSelectedState(k == idx);
                 }
@@ -1156,11 +1394,12 @@ public final class MainActivity extends Activity implements SensorEventListener,
         addCardTitle(cardShade, "Shading Mode");
 
         String[] shadeNames = { "Optical Liquid", "Velocity", "Pressure", "Density" };
+        int activeShadeIdx = (cfg.colorMode == 3) ? 0 : (cfg.colorMode + 1);
         colorModeChips = new FilterChipView[shadeNames.length];
         LinearLayout shadeStrip = makeChipStrip(cardShade);
         for (int i = 0; i < shadeNames.length; i++) {
             final int idx = i;
-            colorModeChips[i] = new FilterChipView(shadeNames[i], i == 0, () -> {
+            colorModeChips[i] = new FilterChipView(shadeNames[i], i == activeShadeIdx, () -> {
                 for (int k = 0; k < colorModeChips.length; k++) {
                     colorModeChips[k].setCheckedState(k == idx);
                 }
@@ -1174,7 +1413,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         colorRampWrap = new LinearLayout(this);
         colorRampWrap.setOrientation(LinearLayout.VERTICAL);
-        colorRampWrap.setVisibility(View.GONE);
+        colorRampWrap.setVisibility(activeShadeIdx == 0 ? View.GONE : View.VISIBLE);
         TextView rampLbl = makeSubtleLabel("Color Gradient");
         rampLbl.setPadding(0, dp(10), 0, dp(6));
         colorRampWrap.addView(rampLbl);
@@ -1184,7 +1423,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         LinearLayout rampStrip = makeChipStrip(colorRampWrap);
         for (int i = 0; i < ramps.length; i++) {
             final int idx = i;
-            colorRampChips[i] = new FilterChipView(ramps[i], i == 0, () -> {
+            colorRampChips[i] = new FilterChipView(ramps[i], i == cfg.colorMap, () -> {
                 cfg.colorMap = idx;
                 for (int k = 0; k < colorRampChips.length; k++) {
                     colorRampChips[k].setCheckedState(k == idx);
@@ -1200,12 +1439,14 @@ public final class MainActivity extends Activity implements SensorEventListener,
         divLp.setMargins(0, dp(12), 0, dp(4));
         cardShade.addView(div, divLp);
 
-        addSwitchRow(cardShade, "Smooth Liquid Surface (SSFR)", "Fast 5-pass screen-space refractive fluid skin", true, checked -> {
+        addSwitchRow(cardShade, "Smooth Liquid Surface (SSFR)", "Fast 5-pass screen-space refractive fluid skin", cfg.liquidSurface, checked -> {
             cfg.liquidSurface = checked;
         });
 
         TextView tvFusionVal = new TextView(this);
-        addM3Slider(cardShade, "Liquid Fusion", "Liquid", tvFusionVal, 0, 100, 100, val -> {
+        int initFusion = Math.max(0, Math.min(100, Math.round(cfg.liquidFusion * 100.0f)));
+        String initFusionTxt = initFusion <= 1 ? "Balls" : (initFusion >= 99 ? "Liquid" : String.format(Locale.US, "Coated %d%%", initFusion));
+        addM3Slider(cardShade, "Liquid Fusion", initFusionTxt, tvFusionVal, 0, 100, initFusion, val -> {
             float v = val / 100.0f;
             cfg.liquidFusion = v;
             if (val <= 1) {
@@ -1217,7 +1458,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             }
         });
 
-        addSwitchRow(cardShade, "Specular & Sky Reflections", "Fresnel rim lighting and sun highlights", true, checked -> {
+        addSwitchRow(cardShade, "Specular & Sky Reflections", "Fresnel rim lighting and sun highlights", cfg.litSpheres, checked -> {
             cfg.litSpheres = checked;
         });
         col.addView(cardShade, cardTopGap());
@@ -1232,7 +1473,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         LinearLayout texStrip = makeChipStrip(cardTex);
         for (int i = 0; i < texNames.length; i++) {
             final int idx = i;
-            texModeChips[i] = new FilterChipView(texNames[i], i == 0, () -> {
+            texModeChips[i] = new FilterChipView(texNames[i], texIds[i] == cfg.texMode, () -> {
                 cfg.texMode = texIds[idx];
                 for (int k = 0; k < texModeChips.length; k++) {
                     texModeChips[k].setCheckedState(k == idx);
@@ -1242,14 +1483,16 @@ public final class MainActivity extends Activity implements SensorEventListener,
         }
 
         TextView tvTexStr = new TextView(this);
-        addM3Slider(cardTex, "Pattern Depth", "0.55", tvTexStr, 0, 100, 55, val -> {
+        int initTexStr = Math.max(0, Math.min(100, Math.round(cfg.texStrength * 100.0f)));
+        addM3Slider(cardTex, "Pattern Depth", String.format(Locale.US, "%.2f", cfg.texStrength), tvTexStr, 0, 100, initTexStr, val -> {
             float v = val / 100.0f;
             cfg.texStrength = v;
             tvTexStr.setText(String.format(Locale.US, "%.2f", v));
         });
 
         tvFoamVal = new TextView(this);
-        sbFoam = addM3Slider(cardTex, "Crest Whitecaps", "0.35", tvFoamVal, 0, 100, 35, val -> {
+        int initFoam = Math.max(0, Math.min(100, Math.round(cfg.foamAmount * 100.0f)));
+        sbFoam = addM3Slider(cardTex, "Crest Whitecaps", String.format(Locale.US, "%.2f", cfg.foamAmount), tvFoamVal, 0, 100, initFoam, val -> {
             if (suppressUiSync) return;
             float v = val / 100.0f;
             cfg.foamAmount = v;
@@ -1262,7 +1505,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         addCardTitle(cardOpt, "Optical Properties");
 
         tvIorVal = new TextView(this);
-        sbIor = addM3Slider(cardOpt, "Fresnel IOR", "1.333", tvIorVal, 100, 250, 133, val -> {
+        int initIor = Math.max(100, Math.min(250, Math.round(cfg.ior * 100.0f)));
+        sbIor = addM3Slider(cardOpt, "Fresnel IOR", String.format(Locale.US, "%.3f", cfg.ior), tvIorVal, 100, 250, initIor, val -> {
             if (suppressUiSync) return;
             float v = val / 100.0f;
             cfg.ior = v;
@@ -1270,7 +1514,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         });
 
         tvRoughVal = new TextView(this);
-        sbRough = addM3Slider(cardOpt, "Surface Roughness", "0.045", tvRoughVal, 15, 800, 45, val -> {
+        int initRough = Math.max(15, Math.min(800, Math.round(cfg.roughness * 1000.0f)));
+        sbRough = addM3Slider(cardOpt, "Surface Roughness", String.format(Locale.US, "%.3f", cfg.roughness), tvRoughVal, 15, 800, initRough, val -> {
             if (suppressUiSync) return;
             float v = val / 1000.0f;
             cfg.roughness = v;
@@ -1278,7 +1523,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         });
 
         tvSpecVal = new TextView(this);
-        sbSpec = addM3Slider(cardOpt, "Sun Specular", "1.35", tvSpecVal, 0, 300, 135, val -> {
+        int initSpec = Math.max(0, Math.min(300, Math.round(cfg.specular * 100.0f)));
+        sbSpec = addM3Slider(cardOpt, "Sun Specular", String.format(Locale.US, "%.2f", cfg.specular), tvSpecVal, 0, 300, initSpec, val -> {
             if (suppressUiSync) return;
             float v = val / 100.0f;
             cfg.specular = v;
@@ -1286,7 +1532,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         });
 
         tvRefrVal = new TextView(this);
-        sbRefr = addM3Slider(cardOpt, "Refraction & Glow", "0.42", tvRefrVal, 0, 120, 42, val -> {
+        int initRefr = Math.max(0, Math.min(120, Math.round(cfg.refraction * 100.0f)));
+        sbRefr = addM3Slider(cardOpt, "Refraction & Glow", String.format(Locale.US, "%.2f", cfg.refraction), tvRefrVal, 0, 120, initRefr, val -> {
             if (suppressUiSync) return;
             float v = val / 100.0f;
             cfg.refraction = v;
@@ -1294,7 +1541,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         });
 
         tvMetalVal = new TextView(this);
-        sbMetal = addM3Slider(cardOpt, "Metallic", "0.00", tvMetalVal, 0, 100, 0, val -> {
+        int initMetal = Math.max(0, Math.min(100, Math.round(cfg.metallic * 100.0f)));
+        sbMetal = addM3Slider(cardOpt, "Metallic", String.format(Locale.US, "%.2f", cfg.metallic), tvMetalVal, 0, 100, initMetal, val -> {
             if (suppressUiSync) return;
             float v = val / 100.0f;
             cfg.metallic = v;
@@ -1373,6 +1621,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
     @Override
     public void onBackendReady(boolean isGpuCompute, String gpuName, float kernelH, int particles) {
         runOnUiThread(() -> {
+            lastGpuComputeState = isGpuCompute;
+            lastKernelHVal = kernelH;
             backendLabel = isGpuCompute ? cleanGpuName(gpuName) : "CPU Multi-Core";
             lastParticles = particles;
             if (statusDotView != null) {
@@ -1391,6 +1641,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             lastFps = fps;
             lastParticles = particles;
             lastStepMs = stepMs;
+            lastKernelHVal = kernelH;
             refreshStatusText();
             if (tvKernelInfo != null) {
                 tvKernelInfo.setText(String.format(Locale.US, "Smoothing radius h: %.3f m", kernelH));
@@ -1467,7 +1718,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
     private FrameLayout buildUpdateModalScrim() {
         FrameLayout scrim = new FrameLayout(this);
-        scrim.setBackgroundColor(0xA805080D);
+        scrim.setBackgroundColor(M3_SCRIM);
         scrim.setElevation(dp(30));
         scrim.setClickable(true);
         scrim.setVisibility(View.GONE);
@@ -1481,7 +1732,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         card.setOrientation(LinearLayout.VERTICAL);
         card.setClickable(true);
         card.setPadding(dp(22), dp(20), dp(22), dp(18));
-        card.setBackground(roundRect(M3_SHEET_SURFACE, 0x38CBE6FF, dp(26)));
+        card.setBackground(roundRect(M3_SHEET_SURFACE, M3_MODAL_BORDER, dp(26)));
         card.setElevation(dp(32));
 
         // Header Row: Icon + Title
@@ -1517,12 +1768,12 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         // Scrollable Release Notes Box
         svModalNotes = new ScrollView(this);
-        svModalNotes.setBackground(roundRect(0xFF0E141C, M3_DIVIDER, dp(14)));
+        svModalNotes.setBackground(roundRect(M3_MODAL_NOTES_BG, M3_DIVIDER, dp(14)));
         svModalNotes.setPadding(dp(12), dp(10), dp(12), dp(10));
         svModalNotes.setVisibility(View.GONE);
 
         tvModalNotes = new TextView(this);
-        tvModalNotes.setTextColor(0xFFCBD5E1);
+        tvModalNotes.setTextColor(M3_MODAL_NOTES_FG);
         tvModalNotes.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         tvModalNotes.setLineSpacing(dp(2), 1.0f);
         svModalNotes.addView(tvModalNotes);
@@ -1537,7 +1788,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         pbUpdateProgress.setMax(1000);
         pbUpdateProgress.setProgress(0);
         pbUpdateProgress.setProgressTintList(ColorStateList.valueOf(M3_PRIMARY));
-        pbUpdateProgress.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF263342));
+        pbUpdateProgress.setProgressBackgroundTintList(ColorStateList.valueOf(M3_TRACK_BG));
         pbUpdateProgress.setVisibility(View.GONE);
         LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1922,7 +2173,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         return gd;
     }
 
-    private static RippleDrawable ripplePill(int fill, int strokeColor, int radiusPx) {
+    private RippleDrawable ripplePill(int fill, int strokeColor, int radiusPx) {
         GradientDrawable content = roundRect(fill, strokeColor, radiusPx);
         GradientDrawable mask = roundRect(Color.WHITE, 0, radiusPx);
         return new RippleDrawable(ColorStateList.valueOf(M3_RIPPLE), content, mask);
@@ -2200,7 +2451,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             float h = getHeight();
             float r = h * 0.5f;
 
-            int trackColor = blendColors(0xFF25303E, M3_PRIMARY, progress);
+            int trackColor = blendColors(M3_SWITCH_OFF_TRACK, M3_PRIMARY, progress);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(trackColor);
             c.drawRoundRect(dp(1), dp(1), w - dp(1), h - dp(1), r, r, paint);
@@ -2208,7 +2459,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             if (progress < 0.95f) {
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(dp(1.8f));
-                paint.setColor(blendColors(0xFF64748B, M3_PRIMARY, progress));
+                paint.setColor(blendColors(M3_SWITCH_OFF_OUTLINE, M3_PRIMARY, progress));
                 c.drawRoundRect(dp(1), dp(1), w - dp(1), h - dp(1), r, r, paint);
             }
 
@@ -2218,7 +2469,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             float thumbR = dp(8) + dp(3) * progress;
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(blendColors(0xFF94A3B8, M3_ON_PRIMARY, progress));
+            paint.setColor(blendColors(M3_SWITCH_OFF_THUMB, M3_ON_PRIMARY, progress));
             c.drawCircle(cx, h * 0.5f, thumbR, paint);
         }
     }
@@ -2366,7 +2617,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         badgeView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         badgeView.setTypeface(TF_MEDIUM);
         badgeView.setPadding(dp(8), dp(2), dp(8), dp(2));
-        badgeView.setBackground(roundRect(0xFF263342, 0, dp(6)));
+        badgeView.setBackground(roundRect(M3_TRACK_BG, 0, dp(6)));
         hdr.addView(badgeView);
         parent.addView(hdr);
 
@@ -2374,7 +2625,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         sb.setMax(max - min);
         sb.setProgress(initial - min);
         sb.setProgressTintList(ColorStateList.valueOf(M3_PRIMARY));
-        sb.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF334155));
+        sb.setProgressBackgroundTintList(ColorStateList.valueOf(M3_SLIDER_TRACK));
         sb.setThumbTintList(ColorStateList.valueOf(M3_PRIMARY));
         sb.setPadding(dp(12), dp(8), dp(12), dp(6));
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {

@@ -25,7 +25,7 @@ struct RenderUniforms {
     int4     modes;         // x: color_mode, y: color_map, z: lit_spheres, w: tex_mode
     float4   light_foam;    // xyz: light_dir, w: foam_amount
     float4   shallow_refr;  // xyz: shallow_color, w: refraction
-    float4   deep_pad;      // xyz: deep_color, w: 0
+    float4   deep_pad;      // xyz: deep_color, w: light_mode
     float4   optics;        // x: ior, y: roughness, z: specular, w: metallic
     float4   line_color;    // rgba wireframe color
 };
@@ -908,7 +908,10 @@ inline float4 shade_particle_core(ParticleVertOut in, float z, constant RenderUn
         float3 spec = pow(max(dot(n, half_dir), 0.0f), spec_pow) * spec_energy * fresnel;
 
         float refl_y = saturate(0.5f + 0.5f * n.y);
-        float3 sky_env = mix(float3(0.08f, 0.14f, 0.24f), float3(0.55f, 0.78f, 0.98f), pow(refl_y, 1.5f));
+        float light_mode = clamp(u.deep_pad.w, 0.0f, 1.0f);
+        float3 sky_low = mix(float3(0.08f, 0.14f, 0.24f), float3(0.46f, 0.64f, 0.86f), light_mode);
+        float3 sky_hi  = mix(float3(0.55f, 0.78f, 0.98f), float3(0.92f, 0.96f, 1.00f), light_mode);
+        float3 sky_env = mix(sky_low, sky_hi, pow(refl_y, 1.5f));
         float3 body_lit = base_color * (0.28f + 0.18f * hemi + 0.62f * ndotl * (1.0f - 0.65f * metallic));
 
         float sss_rim = pow(1.0f - ndotv, 2.2f) * refr_glow * (1.0f - metallic);
@@ -999,6 +1002,7 @@ struct SsfrUniforms {
     float4   optics;    // x: ior, y: roughness, z: specular, w: metallic
     float4   light_inv; // xyz: light_dir, w: inv_rho0
     int4     modes;     // x: color_mode, y: color_map, z: lit_spheres, w: is_2d
+    float4   extra;     // x: light_mode
 };
 
 struct SsfrQuadOut {
@@ -1033,20 +1037,23 @@ fragment float4 ssfr_bg_frag(
     constant SsfrUniforms& u [[buffer(0)]]
 ) {
     float y_up = 1.0f - in.uv.y;
-    float3 low  = float3(0.036f, 0.055f, 0.084f);
-    float3 high = float3(0.072f, 0.108f, 0.162f);
+    float light_mode = clamp(u.extra.x, 0.0f, 1.0f);
+    float3 low  = mix(float3(0.036f, 0.055f, 0.084f), float3(0.790f, 0.845f, 0.920f), light_mode);
+    float3 high = mix(float3(0.072f, 0.108f, 0.162f), float3(0.925f, 0.955f, 0.985f), light_mode);
     float3 bg = mix(low, high, smoothstep(0.0f, 1.0f, y_up));
 
     // Crisp subtle refraction grid cues
     float2 g = abs(fract(in.uv * float2(12.0f, 20.0f)) - 0.5f);
     float gridLine = smoothstep(0.47f, 0.50f, max(g.x, g.y));
-    bg += float3(0.025f, 0.042f, 0.068f) * gridLine * (u.modes.w == 1 ? 0.55f : 0.35f);
+    float3 gridTint = mix(float3(0.025f, 0.042f, 0.068f), float3(-0.085f, -0.068f, -0.042f), light_mode);
+    bg += gridTint * gridLine * (u.modes.w == 1 ? 0.55f : 0.35f);
 
     float floor_mask = smoothstep(0.60f, 0.04f, y_up);
     float t = u.params0.w;
     float c = ssfr_bg_caustic(in.uv * float2(1.3f, 1.8f), t) * 0.60f
             + ssfr_bg_caustic(in.uv * float2(1.9f, 2.4f) + float2(0.37f, -0.21f), -t * 0.8f) * 0.40f;
-    bg += mix(u.shallow.xyz, float3(0.75f, 0.94f, 1.0f), 0.35f) * c * floor_mask * 0.085f;
+    float3 c_tint = mix(mix(u.shallow.xyz, float3(0.75f, 0.94f, 1.0f), 0.35f), float3(0.28f, 0.64f, 0.92f), light_mode);
+    bg += c_tint * c * floor_mask * mix(0.085f, 0.060f, light_mode);
     return float4(bg, 1.0f);
 }
 
@@ -1303,8 +1310,11 @@ fragment float4 ssfr_composite_frag(
     float3 shallow_water = mix(refr_bg * transmittance + deep_tint * (float3(1.0f) - transmittance) * 0.88f, deep_tint, metallic);
 
     float3 refl_dir = reflect(-view_dir, normal);
+    float light_mode = clamp(u.extra.x, 0.0f, 1.0f);
     float sky_t = pow(saturate(refl_dir.y * 0.5f + 0.5f), 1.45f);
-    float3 sky_refl = mix(float3(0.09f, 0.17f, 0.30f), float3(0.76f, 0.90f, 1.0f), sky_t);
+    float3 sky_low = mix(float3(0.09f, 0.17f, 0.30f), float3(0.50f, 0.68f, 0.88f), light_mode);
+    float3 sky_hi  = mix(float3(0.76f, 0.90f, 1.0f), float3(0.95f, 0.98f, 1.00f), light_mode);
+    float3 sky_refl = mix(sky_low, sky_hi, sky_t);
     float softbox = pow(saturate(dot(refl_dir, normalize(float3(-0.20f, 0.82f, 0.38f)))), 14.0f);
     sky_refl += float3(0.72f, 0.84f, 0.96f) * softbox;
     sky_refl *= mix(float3(1.0f), shallow, metallic);

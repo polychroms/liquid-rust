@@ -72,6 +72,7 @@ export class GlRenderer {
         uniform vec4 u_optics;
         uniform float u_refraction;
         uniform float u_foam_amount;
+        uniform float u_light_mode;
 
         out vec4 fragColor;
 
@@ -163,7 +164,9 @@ export class GlRenderer {
                 vec3 spec = pow(max(dot(n, half_dir), 0.0), spec_pow) * spec_energy * fresnel;
 
                 float refl_y = clamp(0.5 + 0.5 * n.y, 0.0, 1.0);
-                vec3 sky_env = mix(vec3(0.08, 0.14, 0.24), vec3(0.55, 0.78, 0.98), pow(refl_y, 1.5));
+                vec3 sky_low = mix(vec3(0.08, 0.14, 0.24), vec3(0.46, 0.64, 0.86), u_light_mode);
+                vec3 sky_hi  = mix(vec3(0.55, 0.78, 0.98), vec3(0.92, 0.96, 1.00), u_light_mode);
+                vec3 sky_env = mix(sky_low, sky_hi, pow(refl_y, 1.5));
                 vec3 body_lit = base_color * (0.28 + 0.18 * hemi + 0.62 * ndotl * (1.0 - 0.65 * metallic));
 
                 float sss_rim = pow(1.0 - ndotv, 2.2) * refr_glow * (1.0 - metallic);
@@ -196,6 +199,7 @@ export class GlRenderer {
         this.uOptics = gl.getUniformLocation(this.particleProgram, 'u_optics');
         this.uRefraction = gl.getUniformLocation(this.particleProgram, 'u_refraction');
         this.uFoamAmount = gl.getUniformLocation(this.particleProgram, 'u_foam_amount');
+        this.uLightMode = gl.getUniformLocation(this.particleProgram, 'u_light_mode');
 
         // 2. Line Shader (Studio floor grid, chamber box, and colliders)
         const lVsSource = `#version 300 es
@@ -243,6 +247,7 @@ export class GlRenderer {
         in vec2 v_uv;
         uniform float u_time;
         uniform vec3 u_water_color;
+        uniform float u_light_mode;
         out vec4 fragColor;
         float caustic(vec2 uv, float t) {
             vec2 p = uv * 5.2;
@@ -252,12 +257,18 @@ export class GlRenderer {
             return pow(clamp(1.0 - abs(a + b + c * 0.65) * 0.65, 0.0, 1.0), 3.6);
         }
         void main() {
-            vec3 low = vec3(0.028, 0.043, 0.072);
-            vec3 high = vec3(0.062, 0.095, 0.155);
+            vec3 darkLow = vec3(0.028, 0.043, 0.072);
+            vec3 darkHigh = vec3(0.062, 0.095, 0.155);
+            vec3 lightLow = vec3(0.790, 0.845, 0.920);
+            vec3 lightHigh = vec3(0.925, 0.955, 0.985);
+            vec3 low = mix(darkLow, lightLow, u_light_mode);
+            vec3 high = mix(darkHigh, lightHigh, u_light_mode);
             vec3 bg = mix(low, high, smoothstep(0.0, 1.0, v_uv.y));
             float floor_mask = smoothstep(0.55, 0.05, v_uv.y);
             float c = caustic(v_uv * vec2(1.4, 1.1), u_time) * 0.6 + caustic(v_uv * 1.9 + vec2(0.37, -0.21), -u_time * 0.8) * 0.4;
-            bg += mix(u_water_color, vec3(0.75, 0.94, 1.0), 0.35) * c * floor_mask * 0.09;
+            vec3 causticTint = mix(mix(u_water_color, vec3(0.75, 0.94, 1.0), 0.35), vec3(0.28, 0.64, 0.92), u_light_mode);
+            float causticAmp = mix(0.09, 0.06, u_light_mode);
+            bg += causticTint * c * floor_mask * causticAmp;
             fragColor = vec4(bg, 1.0);
         }`;
 
@@ -399,6 +410,7 @@ export class GlRenderer {
         uniform float u_refraction;
         uniform float u_foam_amount;
         uniform vec3 u_light_dir;
+        uniform float u_light_mode;
         out vec4 fragColor;
 
         float unpackDepthRGB(vec3 rgb) {
@@ -503,7 +515,9 @@ export class GlRenderer {
 
             vec3 reflDir = reflect(-viewDir, normal);
             float skyT = pow(clamp(reflDir.y * 0.5 + 0.5, 0.0, 1.0), 1.45);
-            vec3 skyReflect = mix(vec3(0.09, 0.17, 0.30), vec3(0.76, 0.90, 1.0), skyT);
+            vec3 skyLow = mix(vec3(0.09, 0.17, 0.30), vec3(0.50, 0.68, 0.88), u_light_mode);
+            vec3 skyHi = mix(vec3(0.76, 0.90, 1.0), vec3(0.95, 0.98, 1.00), u_light_mode);
+            vec3 skyReflect = mix(skyLow, skyHi, skyT);
             float softbox = pow(clamp(dot(reflDir, normalize(vec3(-0.20, 0.82, 0.38))), 0.0, 1.0), 14.0);
             skyReflect += vec3(0.72, 0.84, 0.96) * softbox;
             skyReflect *= mix(vec3(1.0), u_shallow_color, metallic);
@@ -671,13 +685,18 @@ export class GlRenderer {
             return;
         }
 
+        const lightMode = opts.lightMode ? 1.0 : 0.0;
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, viewportWidth, viewportHeight);
-        gl.clearColor(9.0 / 255.0, 12.0 / 255.0, 18.0 / 255.0, 1.0);
+        if (opts.lightMode) {
+            gl.clearColor(230.0 / 255.0, 236.0 / 255.0, 245.0 / 255.0, 1.0);
+        } else {
+            gl.clearColor(9.0 / 255.0, 12.0 / 255.0, 18.0 / 255.0, 1.0);
+        }
         gl.clearDepth(1.0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        this.renderWireframes(solver, viewProjMat);
+        this.renderWireframes(solver, viewProjMat, !!opts.lightMode);
         this.renderParticles(solver, camera, viewMat, projMat, viewportHeight, opts);
     }
 
@@ -685,6 +704,7 @@ export class GlRenderer {
         const gl = this.gl;
         const n = solver.particleCount;
         const t = this.ensureSsfrTargets(fullW, fullH);
+        const lightMode = opts.lightMode ? 1.0 : 0.0;
 
         const fusion = Math.max(0.0, Math.min(1.0, opts.liquidFusion ?? 1.0));
         const shallow = opts.shallowColor ?? [0.22, 0.74, 0.97];
@@ -731,10 +751,11 @@ export class GlRenderer {
         gl.useProgram(this.ssfrBgProgram);
         gl.uniform1f(gl.getUniformLocation(this.ssfrBgProgram, 'u_time'), animTime);
         gl.uniform3f(gl.getUniformLocation(this.ssfrBgProgram, 'u_water_color'), shallow[0], shallow[1], shallow[2]);
+        gl.uniform1f(gl.getUniformLocation(this.ssfrBgProgram, 'u_light_mode'), lightMode);
         gl.bindVertexArray(this.quadVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindVertexArray(null);
-        this.renderWireframes(solver, viewProjMat);
+        this.renderWireframes(solver, viewProjMat, !!opts.lightMode);
 
         const tanHalfFov = Math.tan(camera.fovY * 0.5);
         const depthScale = 16.0;
@@ -856,6 +877,7 @@ export class GlRenderer {
         const lx = 0.48, ly = 0.80, lz = 0.46;
         const invL = 1.0 / Math.hypot(lx, ly, lz);
         gl.uniform3f(gl.getUniformLocation(cp, 'u_light_dir'), lx * invL, ly * invL, lz * invL);
+        gl.uniform1f(gl.getUniformLocation(cp, 'u_light_mode'), lightMode);
 
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindVertexArray(null);
@@ -876,7 +898,7 @@ export class GlRenderer {
         return idx + 6;
     }
 
-    renderWireframes(solver, viewProjMat) {
+    renderWireframes(solver, viewProjMat, lightMode = false) {
         const gl = this.gl;
         const bMin = solver.bounds.min;
         const bMax = solver.bounds.max;
@@ -965,11 +987,19 @@ export class GlRenderer {
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
             if (gridVerts > 0) {
-                gl.uniform4f(this.uLineColor, 0.17, 0.24, 0.35, 0.45);
+                if (lightMode) {
+                    gl.uniform4f(this.uLineColor, 0.34, 0.43, 0.56, 0.36);
+                } else {
+                    gl.uniform4f(this.uLineColor, 0.17, 0.24, 0.35, 0.45);
+                }
                 gl.drawArrays(gl.LINES, 0, gridVerts);
             }
             if (wireVerts > 0) {
-                gl.uniform4f(this.uLineColor, 0.30, 0.66, 0.96, 0.80);
+                if (lightMode) {
+                    gl.uniform4f(this.uLineColor, 0.11, 0.36, 0.70, 0.75);
+                } else {
+                    gl.uniform4f(this.uLineColor, 0.30, 0.66, 0.96, 0.80);
+                }
                 gl.drawArrays(gl.LINES, gridVerts, wireVerts);
             }
             gl.disable(gl.BLEND);
@@ -1069,6 +1099,7 @@ export class GlRenderer {
         gl.uniform4f(this.uOptics, ior, roughness, specular, metallic);
         gl.uniform1f(this.uRefraction, refraction);
         gl.uniform1f(this.uFoamAmount, foamAmount);
+        gl.uniform1f(this.uLightMode, opts.lightMode ? 1.0 : 0.0);
 
         if (solver.is2D) {
             gl.disable(gl.DEPTH_TEST);

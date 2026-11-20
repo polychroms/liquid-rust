@@ -1289,7 +1289,11 @@ void main() {
             let u_vp = gl.get_uniform_location(self.line_program, "u_view_proj");
             let u_col = gl.get_uniform_location(self.line_program, "u_line_color");
             gl.uniform_matrix_4_f32_slice(u_vp.as_ref(), false, &view_proj.to_cols_array());
-            gl.uniform_4_f32(u_col.as_ref(), 0.18, 0.25, 0.36, 0.45);
+            if self.env_preset.is_light_backdrop() {
+                gl.uniform_4_f32(u_col.as_ref(), 0.34, 0.43, 0.56, 0.34);
+            } else {
+                gl.uniform_4_f32(u_col.as_ref(), 0.18, 0.25, 0.36, 0.45);
+            }
 
             gl.bind_vertex_array(Some(self.line_vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.line_vbo));
@@ -1410,7 +1414,11 @@ void main() {
             let u_col = gl.get_uniform_location(self.line_program, "u_line_color");
 
             gl.uniform_matrix_4_f32_slice(u_vp.as_ref(), false, &view_proj.to_cols_array());
-            gl.uniform_4_f32(u_col.as_ref(), 0.34, 0.68, 0.96, 0.78);
+            if self.env_preset.is_light_backdrop() {
+                gl.uniform_4_f32(u_col.as_ref(), 0.10, 0.36, 0.70, 0.74);
+            } else {
+                gl.uniform_4_f32(u_col.as_ref(), 0.34, 0.68, 0.96, 0.78);
+            }
 
             gl.bind_vertex_array(Some(self.line_vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.line_vbo));

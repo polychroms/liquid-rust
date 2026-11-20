@@ -119,6 +119,7 @@ public final class SimulationConfig {
     public volatile float rayDirX = 0f, rayDirY = 0f, rayDirZ = -1f;
 
     // Live Optical Shading & Material
+    public volatile boolean lightTheme = false;   // false: Material You Dark, true: Studio Light
     public volatile boolean liquidSurface = true; // 5-pass SSFR smooth refractive liquid surface
     public volatile float liquidFusion = 1.0f;    // 0.0: distinct spheres, 1.0: smooth fused liquid
     public volatile int colorMode = 3; // 3: Optical Material, 0: Velocity, 1: Pressure, 2: Density

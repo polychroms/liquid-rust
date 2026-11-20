@@ -266,14 +266,23 @@ fn bg_fs(@builtin(position) pos: vec4<f32>) -> FragDepthOut {
                     let gx = i32(floor(hit.x / cell_size));
                     let gz = i32(floor(hit.z / cell_size));
                     let checker = f32((gx + gz) & 1);
-                    var floor_albedo = vec3<f32>(0.042, 0.050, 0.066) + vec3<f32>(checker * 0.012);
+                    let is_light_env = u.flags1.y == 5u;
+                    var floor_albedo = select(
+                        vec3<f32>(0.042, 0.050, 0.066) + vec3<f32>(checker * 0.012),
+                        vec3<f32>(0.680, 0.720, 0.780) + vec3<f32>(checker * 0.055),
+                        is_light_env,
+                    );
 
                     let fx = fract(hit.x / cell_size);
                     let fz = fract(hit.z / cell_size);
                     let dist_minor = min(min(fx, 1.0 - fx), min(fz, 1.0 - fz));
                     let line_w = min(0.012 + t_floor * 0.0025, 0.08);
                     let minor_line = clamp(1.0 - dist_minor / line_w, 0.0, 1.0);
-                    floor_albedo += vec3<f32>(0.030, 0.052, 0.085) * minor_line * 0.65;
+                    if is_light_env {
+                        floor_albedo = mix(floor_albedo, vec3<f32>(0.420, 0.490, 0.600), minor_line * 0.45);
+                    } else {
+                        floor_albedo += vec3<f32>(0.030, 0.052, 0.085) * minor_line * 0.65;
+                    }
 
                     var sun_vis = vec3<f32>(1.0);
                     var caustic_glow = vec3<f32>(0.0);

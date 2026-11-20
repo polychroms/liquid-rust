@@ -30,6 +30,8 @@ public final class MaterialIconDrawable extends Drawable {
     public static final int ICON_CHECK = 12;
     public static final int ICON_CHEVRON_DOWN = 13;
     public static final int ICON_UPDATE = 14;
+    public static final int ICON_SUN = 15;
+    public static final int ICON_MOON = 16;
 
     private int iconType;
     private int tintColor;
@@ -256,6 +258,28 @@ public final class MaterialIconDrawable extends Drawable {
                 path.lineTo(17.7f, 19.5f);
                 path.quadTo(19.0f, 19.5f, 19.0f, 18.2f);
                 path.lineTo(19.0f, 15.2f);
+                canvas.drawPath(path, strokePaint);
+                break;
+            }
+            case ICON_SUN: {
+                strokePaint.setStrokeWidth(1.9f);
+                canvas.drawCircle(12.0f, 12.0f, 4.1f, strokePaint);
+                for (int i = 0; i < 8; i++) {
+                    double a = i * (Math.PI / 4.0);
+                    float c = (float) Math.cos(a);
+                    float s = (float) Math.sin(a);
+                    canvas.drawLine(12.0f + c * 6.5f, 12.0f + s * 6.5f, 12.0f + c * 9.0f, 12.0f + s * 9.0f, strokePaint);
+                }
+                break;
+            }
+            case ICON_MOON: {
+                strokePaint.setStrokeWidth(1.9f);
+                path.moveTo(15.2f, 5.2f);
+                path.quadTo(8.0f, 6.2f, 7.6f, 12.2f);
+                path.quadTo(7.4f, 18.2f, 15.2f, 18.8f);
+                path.quadTo(11.6f, 15.6f, 11.8f, 12.0f);
+                path.quadTo(12.0f, 8.2f, 15.2f, 5.2f);
+                path.close();
                 canvas.drawPath(path, strokePaint);
                 break;
             }

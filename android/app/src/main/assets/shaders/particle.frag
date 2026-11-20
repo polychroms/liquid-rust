@@ -24,6 +24,7 @@ uniform vec3 u_deep_color;
 uniform vec4 u_optics;      // x: ior, y: roughness, z: specular, w: metallic
 uniform float u_refraction;
 uniform float u_foam_amount;
+uniform int u_light_mode;
 
 out vec4 fragColor;
 
@@ -229,7 +230,9 @@ void main() {
         vec3 spec = pow(max(dot(n, half_dir), 0.0), spec_pow) * spec_energy * fresnel;
 
         float refl_y = clamp(0.5 + 0.5 * n.y, 0.0, 1.0);
-        vec3 sky_env = mix(vec3(0.08, 0.14, 0.24), vec3(0.55, 0.78, 0.98), pow(refl_y, 1.5));
+        vec3 sky_low = (u_light_mode == 1) ? vec3(0.46, 0.64, 0.86) : vec3(0.08, 0.14, 0.24);
+        vec3 sky_hi  = (u_light_mode == 1) ? vec3(0.92, 0.96, 1.00) : vec3(0.55, 0.78, 0.98);
+        vec3 sky_env = mix(sky_low, sky_hi, pow(refl_y, 1.5));
         vec3 body_lit = base_color * (0.28 + 0.18 * hemi + 0.62 * ndotl * (1.0 - 0.65 * metallic));
 
         float sss_rim = pow(1.0 - ndotv, 2.2) * refr_glow * (1.0 - metallic);

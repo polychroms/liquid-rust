@@ -187,6 +187,8 @@ enum UiIcon {
     Help,
     Warning,
     Bolt,
+    Sun,
+    Moon,
 }
 
 /// Packed RGB8 frame stored for in-GUI render result display, animation scrubbing, and lossless PNG saving.
@@ -672,6 +674,8 @@ pub struct LiquidApp {
     pub anim_play_idx: usize,
     anim_accum_secs: f32,
     last_anim_tick: Instant,
+    pub dark_mode: bool,
+    pub last_dark_env: EnvironmentPreset,
     pub theme_applied: bool,
     pub export_path: String,
     pub png_output_path: String,
@@ -712,7 +716,8 @@ pub struct LiquidApp {
 impl LiquidApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cleanup_old_binary();
-        Self::apply_studio_theme(&cc.egui_ctx);
+        let initial_dark_mode = Self::load_saved_dark_mode();
+        Self::apply_studio_theme(&cc.egui_ctx, initial_dark_mode);
 
         let bounds = Aabb::new(Vec3::new(-0.8, 0.0, -0.45), Vec3::new(0.8, 1.2, 0.45));
         let config = SolverConfig::default();
@@ -754,6 +759,7 @@ impl LiquidApp {
             preset,
             true,
         );
+        app.set_dark_mode(&cc.egui_ctx, initial_dark_mode);
         app.apply_guided_render_preset(GuidedRenderPreset::RecommendedHd);
         app.render_auto_save_png = true;
         app.theme_applied = true;
@@ -862,6 +868,8 @@ impl LiquidApp {
             anim_play_idx: 0,
             anim_accum_secs: 0.0,
             last_anim_tick: now,
+            dark_mode: true,
+            last_dark_env: EnvironmentPreset::StudioDark,
             theme_applied: false,
             export_path: "exports".to_string(),
             png_output_path: "snapshot.png".to_string(),
@@ -919,38 +927,156 @@ impl LiquidApp {
         }
     }
 
-    /// Apply sleek dark engineering studio theme to `egui`.
-    pub fn apply_studio_theme(ctx: &egui::Context) {
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = egui::Color32::from_rgb(10, 14, 22);
-        visuals.window_fill = egui::Color32::from_rgb(13, 18, 28);
-        visuals.extreme_bg_color = egui::Color32::from_rgb(7, 10, 16);
-        visuals.faint_bg_color = egui::Color32::from_rgb(16, 22, 34);
-        visuals.code_bg_color = egui::Color32::from_rgb(8, 12, 20);
+    fn theme_config_path() -> Option<std::path::PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("APPDATA")
+                    .filter(|v| !v.is_empty())
+                    .map(std::path::PathBuf::from)
+            })
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|v| !v.is_empty())
+                    .map(|h| std::path::PathBuf::from(h).join(".config"))
+            })?;
+        Some(base.join("liquid-rust").join("theme.txt"))
+    }
 
-        let border_subtle = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(33, 45, 67));
-        let border_hover = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(68, 142, 230));
-        let accent_fill = egui::Color32::from_rgb(20, 110, 200);
-        let accent_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(82, 182, 255));
+    fn load_saved_dark_mode() -> bool {
+        let Some(path) = Self::theme_config_path() else {
+            return true;
+        };
+        match std::fs::read_to_string(path) {
+            Ok(txt) => txt.trim().to_ascii_lowercase() != "light",
+            Err(_) => true,
+        }
+    }
 
-        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(14, 19, 30);
+    fn save_dark_mode(dark_mode: bool) {
+        let Some(path) = Self::theme_config_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, if dark_mode { "dark\n" } else { "light\n" });
+    }
+
+    #[inline]
+    fn tc(ui: &egui::Ui, dark: egui::Color32, light: egui::Color32) -> egui::Color32 {
+        if ui.visuals().dark_mode { dark } else { light }
+    }
+
+    pub fn set_dark_mode(&mut self, ctx: &egui::Context, dark_mode: bool) {
+        self.dark_mode = dark_mode;
+        self.theme_applied = true;
+        Self::apply_studio_theme(ctx, dark_mode);
+        Self::save_dark_mode(dark_mode);
+        if dark_mode {
+            if self.mesh_config.env_preset.is_light_backdrop() {
+                self.mesh_config.env_preset = self.last_dark_env;
+            }
+        } else if !self.mesh_config.env_preset.is_light_backdrop() {
+            self.last_dark_env = self.mesh_config.env_preset;
+            self.mesh_config.env_preset = EnvironmentPreset::StudioLight;
+        }
+    }
+
+    /// Apply sleek dark or light engineering studio theme to `egui`.
+    pub fn apply_studio_theme(ctx: &egui::Context, dark_mode: bool) {
+        let mut visuals = if dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+
+        let (
+            panel_fill,
+            window_fill,
+            extreme_bg,
+            faint_bg,
+            code_bg,
+            border_subtle,
+            border_hover,
+            accent_fill,
+            accent_stroke,
+            nonint_bg,
+            nonint_fg,
+            inact_bg,
+            inact_weak,
+            inact_fg,
+            hov_bg,
+            hov_weak,
+            hov_fg,
+            hyperlink,
+        ) = if dark_mode {
+            (
+                egui::Color32::from_rgb(10, 14, 22),
+                egui::Color32::from_rgb(13, 18, 28),
+                egui::Color32::from_rgb(7, 10, 16),
+                egui::Color32::from_rgb(16, 22, 34),
+                egui::Color32::from_rgb(8, 12, 20),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(33, 45, 67)),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(68, 142, 230)),
+                egui::Color32::from_rgb(20, 110, 200),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(82, 182, 255)),
+                egui::Color32::from_rgb(14, 19, 30),
+                egui::Color32::from_rgb(208, 218, 234),
+                egui::Color32::from_rgb(21, 29, 45),
+                egui::Color32::from_rgb(18, 25, 39),
+                egui::Color32::from_rgb(224, 232, 246),
+                egui::Color32::from_rgb(30, 42, 65),
+                egui::Color32::from_rgb(27, 38, 59),
+                egui::Color32::from_rgb(246, 251, 255),
+                egui::Color32::from_rgb(96, 178, 255),
+            )
+        } else {
+            (
+                egui::Color32::from_rgb(241, 245, 250),
+                egui::Color32::from_rgb(248, 250, 253),
+                egui::Color32::from_rgb(228, 234, 243),
+                egui::Color32::from_rgb(233, 239, 247),
+                egui::Color32::from_rgb(226, 233, 243),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(198, 210, 226)),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(38, 118, 210)),
+                egui::Color32::from_rgb(22, 112, 206),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(16, 90, 176)),
+                egui::Color32::from_rgb(236, 241, 248),
+                egui::Color32::from_rgb(36, 48, 66),
+                egui::Color32::from_rgb(226, 233, 244),
+                egui::Color32::from_rgb(232, 238, 248),
+                egui::Color32::from_rgb(22, 33, 48),
+                egui::Color32::from_rgb(211, 223, 240),
+                egui::Color32::from_rgb(218, 229, 244),
+                egui::Color32::from_rgb(10, 20, 34),
+                egui::Color32::from_rgb(16, 98, 192),
+            )
+        };
+
+        visuals.panel_fill = panel_fill;
+        visuals.window_fill = window_fill;
+        visuals.extreme_bg_color = extreme_bg;
+        visuals.faint_bg_color = faint_bg;
+        visuals.code_bg_color = code_bg;
+        visuals.hyperlink_color = hyperlink;
+
+        visuals.widgets.noninteractive.bg_fill = nonint_bg;
         visuals.widgets.noninteractive.bg_stroke = border_subtle;
-        visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(208, 218, 234));
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, nonint_fg);
         visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
 
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(21, 29, 45);
-        visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(18, 25, 39);
+        visuals.widgets.inactive.bg_fill = inact_bg;
+        visuals.widgets.inactive.weak_bg_fill = inact_weak;
         visuals.widgets.inactive.bg_stroke = border_subtle;
-        visuals.widgets.inactive.fg_stroke =
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(224, 232, 246));
+        visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, inact_fg);
         visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
 
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(30, 42, 65);
-        visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(27, 38, 59);
+        visuals.widgets.hovered.bg_fill = hov_bg;
+        visuals.widgets.hovered.weak_bg_fill = hov_weak;
         visuals.widgets.hovered.bg_stroke = border_hover;
-        visuals.widgets.hovered.fg_stroke =
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(246, 251, 255));
+        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, hov_fg);
         visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
 
         visuals.widgets.active.bg_fill = accent_fill;
@@ -4189,6 +4315,38 @@ impl LiquidApp {
                     egui::Stroke::NONE,
                 ));
             }
+            UiIcon::Sun => {
+                painter.circle_stroke(center, 2.5, s);
+                for i in 0..8 {
+                    let ang = (i as f32) * std::f32::consts::FRAC_PI_4;
+                    let (sin_a, cos_a) = ang.sin_cos();
+                    painter.line_segment(
+                        [
+                            egui::pos2(center.x + cos_a * 3.8, center.y + sin_a * 3.8),
+                            egui::pos2(center.x + cos_a * 5.4, center.y + sin_a * 5.4),
+                        ],
+                        s,
+                    );
+                }
+            }
+            UiIcon::Moon => {
+                // Crisp C-crescent silhouette pointing left
+                let pts = [
+                    egui::pos2(center.x + 2.4, center.y - 4.8),
+                    egui::pos2(center.x - 1.4, center.y - 4.2),
+                    egui::pos2(center.x - 3.8, center.y - 1.6),
+                    egui::pos2(center.x - 3.8, center.y + 1.8),
+                    egui::pos2(center.x - 1.4, center.y + 4.3),
+                    egui::pos2(center.x + 2.5, center.y + 4.8),
+                    egui::pos2(center.x + 0.2, center.y + 2.6),
+                    egui::pos2(center.x - 0.5, center.y),
+                    egui::pos2(center.x + 0.2, center.y - 2.6),
+                    egui::pos2(center.x + 2.4, center.y - 4.8),
+                ];
+                for w in pts.windows(2) {
+                    painter.line_segment([w[0], w[1]], s);
+                }
+            }
         }
     }
 
@@ -4203,9 +4361,8 @@ impl LiquidApp {
         let galley = if label.is_empty() {
             None
         } else {
-            Some(ui.fonts(|f| {
-                f.layout_no_wrap(label.to_string(), font_id.clone(), egui::Color32::WHITE)
-            }))
+            let tc = ui.visuals().text_color();
+            Some(ui.fonts(|f| f.layout_no_wrap(label.to_string(), font_id.clone(), tc)))
         };
         let text_w = galley.as_ref().map_or(0.0, |g| g.size().x);
         let gap = if label.is_empty() { 0.0 } else { 5.5 };
@@ -4268,9 +4425,8 @@ impl LiquidApp {
         width: f32,
     ) -> egui::Response {
         let font_id = egui::FontId::proportional(11.5);
-        let galley = ui.fonts(|f| {
-            f.layout_no_wrap(label.to_string(), font_id.clone(), egui::Color32::WHITE)
-        });
+        let tc = ui.visuals().text_color();
+        let galley = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font_id.clone(), tc));
         let text_w = galley.size().x;
         let icon_w = 11.5;
         let gap = 4.0;
@@ -4320,9 +4476,20 @@ impl LiquidApp {
     }
 
     fn draw_telemetry_pill(ui: &mut egui::Ui, text: String, color: egui::Color32) {
+        let dark = ui.visuals().dark_mode;
+        let fill = if dark {
+            egui::Color32::from_rgb(15, 21, 33)
+        } else {
+            egui::Color32::from_rgb(230, 236, 245)
+        };
+        let stroke_col = if dark {
+            egui::Color32::from_rgb(33, 45, 67)
+        } else {
+            egui::Color32::from_rgb(194, 206, 224)
+        };
         egui::Frame::NONE
-            .fill(egui::Color32::from_rgb(15, 21, 33))
-            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(33, 45, 67)))
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0_f32, stroke_col))
             .corner_radius(egui::CornerRadius::same(5))
             .inner_margin(egui::Margin::symmetric(8, 3))
             .show(ui, |ui| {
@@ -4335,9 +4502,25 @@ impl LiquidApp {
         title: &str,
         add_contents: impl FnOnce(&mut egui::Ui) -> R,
     ) -> R {
+        let dark = ui.visuals().dark_mode;
+        let fill = if dark {
+            egui::Color32::from_rgb(14, 20, 32)
+        } else {
+            egui::Color32::from_rgb(248, 250, 253)
+        };
+        let stroke_col = if dark {
+            egui::Color32::from_rgb(29, 40, 60)
+        } else {
+            egui::Color32::from_rgb(206, 216, 231)
+        };
+        let title_col = if dark {
+            egui::Color32::from_rgb(138, 192, 255)
+        } else {
+            egui::Color32::from_rgb(18, 92, 178)
+        };
         egui::Frame::NONE
-            .fill(egui::Color32::from_rgb(14, 20, 32))
-            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(29, 40, 60)))
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0_f32, stroke_col))
             .corner_radius(egui::CornerRadius::same(8))
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
@@ -4346,7 +4529,7 @@ impl LiquidApp {
                     egui::RichText::new(title)
                         .strong()
                         .size(12.2)
-                        .color(egui::Color32::from_rgb(138, 192, 255)),
+                        .color(title_col),
                 );
                 ui.add_space(4.0);
                 add_contents(ui)
@@ -4358,25 +4541,46 @@ impl LiquidApp {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
         let hovered = response.hovered();
         let active = response.is_pointer_button_down_on();
+        let dark = ui.visuals().dark_mode;
 
         if ui.is_rect_visible(rect) {
-            let (bg, border, icon_col) = if active {
+            let (bg, border, icon_col) = if dark {
+                if active {
+                    (
+                        egui::Color32::from_rgb(92, 32, 42),
+                        egui::Color32::from_rgb(225, 95, 105),
+                        egui::Color32::from_rgb(255, 165, 170),
+                    )
+                } else if hovered {
+                    (
+                        egui::Color32::from_rgb(68, 28, 38),
+                        egui::Color32::from_rgb(196, 82, 92),
+                        egui::Color32::from_rgb(252, 132, 138),
+                    )
+                } else {
+                    (
+                        egui::Color32::from_rgb(24, 34, 52),
+                        egui::Color32::from_rgb(46, 63, 92),
+                        egui::Color32::from_rgb(176, 192, 214),
+                    )
+                }
+            } else if active {
                 (
-                    egui::Color32::from_rgb(92, 32, 42),
-                    egui::Color32::from_rgb(225, 95, 105),
-                    egui::Color32::from_rgb(255, 165, 170),
+                    egui::Color32::from_rgb(250, 208, 214),
+                    egui::Color32::from_rgb(200, 48, 62),
+                    egui::Color32::from_rgb(156, 24, 38),
                 )
             } else if hovered {
                 (
-                    egui::Color32::from_rgb(68, 28, 38),
-                    egui::Color32::from_rgb(196, 82, 92),
-                    egui::Color32::from_rgb(252, 132, 138),
+                    egui::Color32::from_rgb(252, 226, 230),
+                    egui::Color32::from_rgb(212, 72, 84),
+                    egui::Color32::from_rgb(178, 34, 48),
                 )
             } else {
                 (
-                    egui::Color32::from_rgb(24, 34, 52),
-                    egui::Color32::from_rgb(46, 63, 92),
-                    egui::Color32::from_rgb(176, 192, 214),
+                    egui::Color32::from_rgb(228, 235, 245),
+                    egui::Color32::from_rgb(190, 203, 222),
+                    egui::Color32::from_rgb(72, 88, 110),
                 )
             };
 
@@ -4513,8 +4717,11 @@ impl LiquidApp {
             for &q in SimulationQuality::ALL {
                 let is_cur = self.current_quality == q;
                 let label_text = if q == SimulationQuality::Extreme {
-                    egui::RichText::new(q.name_for(self.is_2d))
-                        .color(egui::Color32::from_rgb(255, 150, 72))
+                    egui::RichText::new(q.name_for(self.is_2d)).color(Self::tc(
+                        ui,
+                        egui::Color32::from_rgb(255, 150, 72),
+                        egui::Color32::from_rgb(196, 82, 8),
+                    ))
                 } else {
                     egui::RichText::new(q.name_for(self.is_2d))
                 };
@@ -4844,8 +5051,11 @@ impl LiquidApp {
                         ui.strong(&collider.name);
                         if let Some(tris) = tri_badge {
                             ui.small(
-                                egui::RichText::new(format!("({} tris)", tris))
-                                    .color(egui::Color32::from_rgb(138, 152, 172)),
+                                egui::RichText::new(format!("({} tris)", tris)).color(Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(138, 152, 172),
+                                    egui::Color32::from_rgb(86, 100, 122),
+                                )),
                             );
                         }
                         if tri_badge.is_some()
@@ -6235,7 +6445,11 @@ impl LiquidApp {
 
             ui.add_space(2.0);
             ui.colored_label(
-                egui::Color32::from_rgb(148, 194, 236),
+                Self::tc(
+                    ui,
+                    egui::Color32::from_rgb(148, 194, 236),
+                    egui::Color32::from_rgb(26, 98, 172),
+                ),
                 self.guided_render_preset.summary(),
             );
         });
@@ -6428,7 +6642,11 @@ impl LiquidApp {
 
             if bg_kind == StudioRenderKind::Interactive3D && baked_len > 0 && !is_running {
                 ui.colored_label(
-                    egui::Color32::from_rgb(104, 224, 158),
+                    Self::tc(
+                        ui,
+                        egui::Color32::from_rgb(104, 224, 158),
+                        egui::Color32::from_rgb(16, 132, 74),
+                    ),
                     "Live Relighting Active: Material & Sky Lighting update your rendered 3D replay instantly!",
                 );
             }
@@ -6445,7 +6663,11 @@ impl LiquidApp {
                 )
             {
                 ui.colored_label(
-                    egui::Color32::from_rgb(255, 196, 92),
+                    Self::tc(
+                        ui,
+                        egui::Color32::from_rgb(255, 196, 92),
+                        egui::Color32::from_rgb(176, 100, 10),
+                    ),
                     "Note: 1M+ particle VFX tiers run offline in the background without freezing the editor, but require high RAM/VRAM and take longer.",
                 );
             }
@@ -6746,7 +6968,14 @@ impl LiquidApp {
                 };
 
                 if !phase_lbl.is_empty() {
-                    ui.colored_label(egui::Color32::from_rgb(154, 214, 255), &phase_lbl);
+                    ui.colored_label(
+                        Self::tc(
+                            ui,
+                            egui::Color32::from_rgb(154, 214, 255),
+                            egui::Color32::from_rgb(18, 102, 186),
+                        ),
+                        &phase_lbl,
+                    );
                 }
                 ui.add(egui::ProgressBar::new(frac).animate(true).text(bar_txt));
 
@@ -6919,7 +7148,11 @@ impl LiquidApp {
                         if !backend_lbl.is_empty() {
                             ui.weak("Engine:");
                             ui.colored_label(
-                                egui::Color32::from_rgb(114, 198, 255),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(114, 198, 255),
+                                    egui::Color32::from_rgb(18, 102, 186),
+                                ),
                                 &backend_lbl,
                             );
                             ui.end_row();
@@ -7050,9 +7283,11 @@ impl LiquidApp {
                     ui.horizontal(|ui| {
                         ui.weak("Saved:");
                         ui.monospace(
-                            egui::RichText::new(p)
-                                .size(11.0)
-                                .color(egui::Color32::from_rgb(120, 224, 158)),
+                            egui::RichText::new(p).size(11.0).color(Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(120, 224, 158),
+                                egui::Color32::from_rgb(16, 132, 74),
+                            )),
                         );
                         if Self::icon_button(
                             ui,
@@ -7245,7 +7480,11 @@ impl LiquidApp {
             ui.checkbox(&mut self.export_sequence, "Auto-record PLY sequence while playing");
             if self.export_sequence {
                 ui.colored_label(
-                    egui::Color32::from_rgb(255, 185, 65),
+                    Self::tc(
+                        ui,
+                        egui::Color32::from_rgb(255, 185, 65),
+                        egui::Color32::from_rgb(176, 100, 10),
+                    ),
                     format!("Recording frame {:05}", self.exported_frames_count),
                 );
             }
@@ -7332,7 +7571,7 @@ impl LiquidApp {
 impl eframe::App for LiquidApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.theme_applied {
-            Self::apply_studio_theme(ctx);
+            Self::apply_studio_theme(ctx, self.dark_mode);
             self.theme_applied = true;
         }
 
@@ -7698,13 +7937,21 @@ impl eframe::App for LiquidApp {
                         ui.painter(),
                         logo_rect.center(),
                         UiIcon::Wave,
-                        egui::Color32::from_rgb(86, 188, 255),
+                        Self::tc(
+                            ui,
+                            egui::Color32::from_rgb(86, 188, 255),
+                            egui::Color32::from_rgb(20, 106, 202),
+                        ),
                     );
                     ui.label(
                         egui::RichText::new("LiquidRust")
                             .strong()
                             .size(15.5)
-                            .color(egui::Color32::from_rgb(236, 245, 255)),
+                            .color(Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(236, 245, 255),
+                                egui::Color32::from_rgb(16, 26, 42),
+                            )),
                     );
 
                     // Version pill / Update badge right next to app title
@@ -7755,9 +8002,17 @@ impl eframe::App for LiquidApp {
                                 egui::RichText::new(format!("v{}", CURRENT_VERSION))
                                     .monospace()
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgb(148, 178, 214)),
+                                    .color(Self::tc(
+                                        ui,
+                                        egui::Color32::from_rgb(148, 178, 214),
+                                        egui::Color32::from_rgb(36, 74, 126),
+                                    )),
                             )
-                            .fill(egui::Color32::from_rgb(20, 28, 42));
+                            .fill(Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(20, 28, 42),
+                                egui::Color32::from_rgb(224, 232, 245),
+                            ));
                             if ui
                                 .add(ver_btn)
                                 .on_hover_text("Check GitHub Releases for updates")
@@ -7890,6 +8145,18 @@ impl eframe::App for LiquidApp {
 
                     // Right-aligned zero-jitter monospace telemetry pills + quick actions
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (theme_icon, theme_lbl, theme_tip) = if self.dark_mode {
+                            (UiIcon::Sun, "Light", "Switch UI & Studio backdrop to Light Theme")
+                        } else {
+                            (UiIcon::Moon, "Dark", "Switch UI & Studio backdrop to Dark Theme")
+                        };
+                        if Self::icon_button(ui, theme_icon, theme_lbl, false, None)
+                            .on_hover_text(theme_tip)
+                            .clicked()
+                        {
+                            self.set_dark_mode(ctx, !self.dark_mode);
+                        }
+
                         if Self::icon_button(
                             ui,
                             UiIcon::Help,
@@ -7925,13 +8192,21 @@ impl eframe::App for LiquidApp {
                             Self::draw_telemetry_pill(
                                 ui,
                                 "  0.0 ms".to_string(),
-                                egui::Color32::from_rgb(82, 224, 150),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(82, 224, 150),
+                                    egui::Color32::from_rgb(14, 128, 72),
+                                ),
                             );
                         } else {
                             Self::draw_telemetry_pill(
                                 ui,
                                 format!("{:>5.1} ms", self.last_step_time_ms),
-                                egui::Color32::from_rgb(130, 198, 255),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(130, 198, 255),
+                                    egui::Color32::from_rgb(18, 96, 182),
+                                ),
                             );
                         }
 
@@ -7939,22 +8214,42 @@ impl eframe::App for LiquidApp {
                             Self::draw_telemetry_pill(
                                 ui,
                                 format!("{:>7} tris", self.cached_surface_mesh.triangle_count()),
-                                egui::Color32::from_rgb(168, 226, 255),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(168, 226, 255),
+                                    egui::Color32::from_rgb(20, 88, 166),
+                                ),
                             );
                         } else {
                             Self::draw_telemetry_pill(
                                 ui,
                                 format!("{:>7} pts", self.solver.particle_count()),
-                                egui::Color32::from_rgb(190, 210, 236),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(190, 210, 236),
+                                    egui::Color32::from_rgb(38, 52, 74),
+                                ),
                             );
                         }
 
                         let fps_col = if self.current_fps >= 50.0 {
-                            egui::Color32::from_rgb(82, 224, 150)
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(82, 224, 150),
+                                egui::Color32::from_rgb(14, 128, 72),
+                            )
                         } else if self.current_fps >= 25.0 {
-                            egui::Color32::from_rgb(255, 198, 86)
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(255, 198, 86),
+                                egui::Color32::from_rgb(176, 100, 10),
+                            )
                         } else {
-                            egui::Color32::from_rgb(255, 110, 110)
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(255, 110, 110),
+                                egui::Color32::from_rgb(190, 34, 42),
+                            )
                         };
                         Self::draw_telemetry_pill(
                             ui,
@@ -7977,22 +8272,22 @@ impl eframe::App for LiquidApp {
                     };
                     let (ic_r, _) =
                         ui.allocate_exact_size(egui::vec2(13.0, 14.0), egui::Sense::hover());
-                    Self::paint_icon(
-                        ui.painter(),
-                        ic_r.center(),
-                        b_icon,
+                    let backend_col = Self::tc(
+                        ui,
                         egui::Color32::from_rgb(112, 184, 255),
+                        egui::Color32::from_rgb(18, 96, 182),
                     );
-                    ui.label(
-                        egui::RichText::new(backend_str)
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(112, 184, 255)),
-                    );
+                    Self::paint_icon(ui.painter(), ic_r.center(), b_icon, backend_col);
+                    ui.label(egui::RichText::new(backend_str).size(11.0).color(backend_col));
                     ui.separator();
                     ui.label(
                         egui::RichText::new(&self.status_message)
                             .size(11.0)
-                            .color(egui::Color32::from_rgb(194, 206, 226)),
+                            .color(Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(194, 206, 226),
+                                egui::Color32::from_rgb(48, 62, 84),
+                            )),
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -8142,7 +8437,14 @@ impl eframe::App for LiquidApp {
                         } else {
                             "Rendering...".to_string()
                         };
-                        ui.colored_label(egui::Color32::from_rgb(108, 204, 255), prog_str);
+                        ui.colored_label(
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(108, 204, 255),
+                                egui::Color32::from_rgb(18, 98, 184),
+                            ),
+                            prog_str,
+                        );
                     }
 
                     if self.central_view == CentralView::RenderResult {
@@ -8266,13 +8568,21 @@ impl eframe::App for LiquidApp {
                                 Self::draw_telemetry_pill(
                                     ui,
                                     pill_txt,
-                                    egui::Color32::from_rgb(154, 214, 255),
+                                    Self::tc(
+                                        ui,
+                                        egui::Color32::from_rgb(154, 214, 255),
+                                        egui::Color32::from_rgb(18, 96, 182),
+                                    ),
                                 );
                                 if !bg_backend.is_empty() {
                                     Self::draw_telemetry_pill(
                                         ui,
                                         bg_backend.clone(),
-                                        egui::Color32::from_rgb(112, 224, 168),
+                                        Self::tc(
+                                            ui,
+                                            egui::Color32::from_rgb(112, 224, 168),
+                                            egui::Color32::from_rgb(14, 128, 72),
+                                        ),
                                     );
                                 }
                             }
@@ -8381,7 +8691,11 @@ impl eframe::App for LiquidApp {
                                 cur_secs,
                                 tot_secs
                             ),
-                            egui::Color32::from_rgb(168, 214, 255),
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(168, 214, 255),
+                                egui::Color32::from_rgb(18, 96, 182),
+                            ),
                         );
 
                         let mut frame_one_based = clamped_idx + 1;
@@ -8401,7 +8715,11 @@ impl eframe::App for LiquidApp {
 
         // 4. Central Workspace: Live OpenGL 3D Viewport, Interactive 3D Free-Orbit Replay, OR 2D Render Viewer
         let bg_rgb = if self.central_view == CentralView::RenderResult && !is_baked_3d_view {
-            [8u8, 11, 18]
+            if self.dark_mode {
+                [8u8, 11, 18]
+            } else {
+                [230u8, 236, 245]
+            }
         } else {
             self.mesh_config.env_preset.viewport_bg_rgb8()
         };
@@ -8732,7 +9050,11 @@ impl eframe::App for LiquidApp {
                             p.rect(
                                 banner_rect,
                                 egui::CornerRadius::same(6),
-                                egui::Color32::from_rgba_unmultiplied(12, 18, 30, 228),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgba_unmultiplied(12, 18, 30, 228),
+                                    egui::Color32::from_rgba_unmultiplied(245, 248, 253, 236),
+                                ),
                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(58, 134, 220)),
                                 egui::StrokeKind::Inside,
                             );
@@ -8741,7 +9063,11 @@ impl eframe::App for LiquidApp {
                                 egui::Align2::CENTER_CENTER,
                                 banner_txt,
                                 egui::FontId::proportional(12.5),
-                                egui::Color32::from_rgb(168, 224, 255),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(168, 224, 255),
+                                    egui::Color32::from_rgb(16, 86, 168),
+                                ),
                             );
                         } else if bg_baked_len > 0 {
                             let hud_rect = egui::Rect::from_center_size(
@@ -8751,7 +9077,11 @@ impl eframe::App for LiquidApp {
                             p.rect(
                                 hud_rect,
                                 egui::CornerRadius::same(13),
-                                egui::Color32::from_rgba_unmultiplied(10, 18, 28, 196),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgba_unmultiplied(10, 18, 28, 196),
+                                    egui::Color32::from_rgba_unmultiplied(244, 249, 247, 226),
+                                ),
                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(52, 148, 118)),
                                 egui::StrokeKind::Inside,
                             );
@@ -8760,7 +9090,11 @@ impl eframe::App for LiquidApp {
                                 egui::Align2::CENTER_CENTER,
                                 "3D Free-Orbit Replay (0% Physics Load) — Drag to Orbit • Shift+Drag to Pan • Scroll to Zoom",
                                 egui::FontId::proportional(11.8),
-                                egui::Color32::from_rgb(144, 236, 188),
+                                Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(144, 236, 188),
+                                    egui::Color32::from_rgb(14, 116, 68),
+                                ),
                             );
                         }
                         return;
@@ -8889,7 +9223,11 @@ impl eframe::App for LiquidApp {
                                         egui::RichText::new("Ready to Render Your Fluid Scene")
                                             .size(17.0)
                                             .strong()
-                                            .color(egui::Color32::from_rgb(208, 224, 248)),
+                                            .color(Self::tc(
+                                                ui,
+                                                egui::Color32::from_rgb(208, 224, 248),
+                                                egui::Color32::from_rgb(22, 36, 56),
+                                            )),
                                     );
                                     ui.add_space(4.0);
                                     ui.label(
@@ -8897,7 +9235,11 @@ impl eframe::App for LiquidApp {
                                             "Pick a preset in the Render tab on the left, or start right away below:",
                                         )
                                         .size(12.5)
-                                        .color(egui::Color32::from_rgb(142, 168, 202)),
+                                        .color(Self::tc(
+                                            ui,
+                                            egui::Color32::from_rgb(142, 168, 202),
+                                            egui::Color32::from_rgb(76, 94, 120),
+                                        )),
                                     );
                                     ui.add_space(10.0);
                                     if Self::icon_button(
@@ -8977,7 +9319,11 @@ impl eframe::App for LiquidApp {
                         p.rect(
                             banner_rect,
                             egui::CornerRadius::same(6),
-                            egui::Color32::from_rgba_unmultiplied(12, 18, 30, 228),
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgba_unmultiplied(12, 18, 30, 228),
+                                egui::Color32::from_rgba_unmultiplied(245, 248, 253, 236),
+                            ),
                             egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(58, 134, 220)),
                             egui::StrokeKind::Inside,
                         );
@@ -8986,7 +9332,11 @@ impl eframe::App for LiquidApp {
                             egui::Align2::CENTER_CENTER,
                             banner_txt,
                             egui::FontId::proportional(12.5),
-                            egui::Color32::from_rgb(168, 224, 255),
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(168, 224, 255),
+                                egui::Color32::from_rgb(16, 86, 168),
+                            ),
                         );
                     }
                     return;
@@ -9369,8 +9719,11 @@ impl eframe::App for LiquidApp {
                                 ("Mouse Wheel", "Zoom camera in / out"),
                             ] {
                                 ui.monospace(
-                                    egui::RichText::new(k)
-                                        .color(egui::Color32::from_rgb(138, 198, 255)),
+                                    egui::RichText::new(k).color(Self::tc(
+                                        ui,
+                                        egui::Color32::from_rgb(138, 198, 255),
+                                        egui::Color32::from_rgb(18, 96, 182),
+                                    )),
                                 );
                                 ui.label(desc);
                                 ui.end_row();
@@ -9741,7 +10094,11 @@ impl LiquidApp {
                     }
                     UpdatePhase::UpToDate(info) => {
                         ui.colored_label(
-                            egui::Color32::from_rgb(74, 222, 128),
+                            Self::tc(
+                                ui,
+                                egui::Color32::from_rgb(74, 222, 128),
+                                egui::Color32::from_rgb(16, 132, 74),
+                            ),
                             egui::RichText::new(format!(
                                 "You are running the latest version (v{}).",
                                 CURRENT_VERSION
@@ -9789,7 +10146,11 @@ impl LiquidApp {
                                 ))
                                 .strong()
                                 .size(15.0)
-                                .color(egui::Color32::from_rgb(104, 214, 255)),
+                                .color(Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(104, 214, 255),
+                                    egui::Color32::from_rgb(16, 98, 192),
+                                )),
                             );
                             ui.weak(format!(
                                 "• {} ({})",
@@ -9801,10 +10162,18 @@ impl LiquidApp {
                             ui.add_space(6.0);
                             ui.label(egui::RichText::new("Release Notes:").strong().size(12.0));
                             egui::Frame::NONE
-                                .fill(egui::Color32::from_rgb(9, 13, 21))
+                                .fill(Self::tc(
+                                    ui,
+                                    egui::Color32::from_rgb(9, 13, 21),
+                                    egui::Color32::from_rgb(235, 240, 247),
+                                ))
                                 .stroke(egui::Stroke::new(
                                     1.0_f32,
-                                    egui::Color32::from_rgb(30, 41, 61),
+                                    Self::tc(
+                                        ui,
+                                        egui::Color32::from_rgb(30, 41, 61),
+                                        egui::Color32::from_rgb(198, 210, 226),
+                                    ),
                                 ))
                                 .corner_radius(egui::CornerRadius::same(6))
                                 .inner_margin(egui::Margin::same(8))

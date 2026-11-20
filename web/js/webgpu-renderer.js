@@ -411,7 +411,8 @@ export class WebGpuRenderer {
         this.viewProjScratch.elements.set(projMat.elements);
         const viewProjMat = this.viewProjScratch.multiply(viewMat);
 
-        this.updateWireframeBuffer(solver, viewProjMat);
+        const lightMode = !!opts.lightMode;
+        this.updateWireframeBuffer(solver, viewProjMat, lightMode);
 
         if (liquidSurface && liquidFusion > 0.005 && solver.particleCount > 0) {
             this.renderSsfr(solver, camera, viewMat, projMat, width, height, opts, liquidFusion);
@@ -496,9 +497,9 @@ export class WebGpuRenderer {
         f32[74] = specular;
         f32[75] = metallic;
 
-        // 76..79: foam_params [crest_foam_intensity, 0, 0, 0]
+        // 76..79: foam_params [crest_foam_intensity, light_mode, 0, 0]
         f32[76] = foamAmount;
-        f32[77] = 0.0;
+        f32[77] = lightMode ? 1.0 : 0.0;
         f32[78] = 0.0;
         f32[79] = 0.0;
 
@@ -518,11 +519,14 @@ export class WebGpuRenderer {
         }
 
         const encoder = device.createCommandEncoder({ label: 'Render Encoder' });
+        const clearRgb = lightMode
+            ? { r: 230 / 255, g: 236 / 255, b: 245 / 255, a: 1.0 }
+            : { r: 9 / 255, g: 12 / 255, b: 18 / 255, a: 1.0 };
         const pass = encoder.beginRenderPass({
             label: 'PBF Main Render Pass',
             colorAttachments: [{
                 view: this.context.getCurrentTexture().createView(),
-                clearValue: { r: 9 / 255, g: 12 / 255, b: 18 / 255, a: 1.0 },
+                clearValue: clearRgb,
                 loadOp: 'clear',
                 storeOp: 'store',
             }],
@@ -635,7 +639,7 @@ export class WebGpuRenderer {
         s[56] = lx * invL;
         s[57] = ly * invL;
         s[58] = lz * invL;
-        s[59] = 0.0;
+        s[59] = opts.lightMode ? 1.0 : 0.0;
 
         device.queue.writeBuffer(this.ssfrDepthBuf, 0, this.ssfrBuf);
         device.queue.writeBuffer(this.ssfrBlurH1Buf, 0, this.ssfrBuf);
@@ -660,11 +664,14 @@ export class WebGpuRenderer {
 
         // Pass A: Background gradient + animated floor caustics + studio grid & chamber wireframes
         {
+            const bgClearRgb = opts.lightMode
+                ? { r: 230 / 255, g: 236 / 255, b: 245 / 255, a: 1.0 }
+                : { r: 9 / 255, g: 12 / 255, b: 18 / 255, a: 1.0 };
             const pass = encoder.beginRenderPass({
                 label: 'SSFR Pass A - Background',
                 colorAttachments: [{
                     view: t.bgView,
-                    clearValue: { r: 9 / 255, g: 12 / 255, b: 18 / 255, a: 1.0 },
+                    clearValue: bgClearRgb,
                     loadOp: 'clear',
                     storeOp: 'store',
                 }],
@@ -790,13 +797,20 @@ export class WebGpuRenderer {
         return idx + 6;
     }
 
-    updateWireframeBuffer(solver, viewProjMat) {
-        // Wireframe color uniform (crisp studio cyan-blue)
+    updateWireframeBuffer(solver, viewProjMat, lightMode = false) {
+        // Wireframe color uniform (crisp cobalt in light theme, studio cyan-blue in dark theme)
         this.wF32.set(viewProjMat.elements, 0);
-        this.wF32[16] = 0.30;
-        this.wF32[17] = 0.66;
-        this.wF32[18] = 0.96;
-        this.wF32[19] = 0.78;
+        if (lightMode) {
+            this.wF32[16] = 0.11;
+            this.wF32[17] = 0.36;
+            this.wF32[18] = 0.70;
+            this.wF32[19] = 0.76;
+        } else {
+            this.wF32[16] = 0.30;
+            this.wF32[17] = 0.66;
+            this.wF32[18] = 0.96;
+            this.wF32[19] = 0.78;
+        }
         this.device.queue.writeBuffer(this.wireUniformBuf, 0, this.wBuf);
 
         let idx = 0;
@@ -806,10 +820,17 @@ export class WebGpuRenderer {
         // Subtle 3D studio floor grid (when in 3D mode)
         if (!solver.is2D) {
             this.gF32.set(viewProjMat.elements, 0);
-            this.gF32[16] = 0.17;
-            this.gF32[17] = 0.24;
-            this.gF32[18] = 0.35;
-            this.gF32[19] = 0.45;
+            if (lightMode) {
+                this.gF32[16] = 0.34;
+                this.gF32[17] = 0.43;
+                this.gF32[18] = 0.56;
+                this.gF32[19] = 0.36;
+            } else {
+                this.gF32[16] = 0.17;
+                this.gF32[17] = 0.24;
+                this.gF32[18] = 0.35;
+                this.gF32[19] = 0.45;
+            }
             this.device.queue.writeBuffer(this.gridUniformBuf, 0, this.gBuf);
 
             const yFloor = bMin.y - 0.001;

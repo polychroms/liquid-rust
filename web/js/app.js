@@ -5,13 +5,13 @@
 import { Vec3, Ray } from './math.js?v=20261113b';
 import { Camera } from './camera.js?v=20261113b';
 import { PbfSolver, ScenePreset } from './pbf-solver.js?v=20261113b';
-import { GlRenderer } from './gl-renderer.js?v=20261120a';
+import { GlRenderer } from './gl-renderer.js?v=20261120b';
 import { WebGpuSolver } from './webgpu-solver.js?v=20261113b';
-import { WebGpuRenderer } from './webgpu-renderer.js?v=20261120a';
+import { WebGpuRenderer } from './webgpu-renderer.js?v=20261120b';
 
 const RELEASE_LATEST = 'https://github.com/rappar222/liquid-rust/releases/latest';
 const RELEASE_DL = `${RELEASE_LATEST}/download`;
-const RELEASE_VER_DL = 'https://github.com/rappar222/liquid-rust/releases/download/v0.4.0';
+const RELEASE_VER_DL = 'https://github.com/rappar222/liquid-rust/releases/download/v0.4.1';
 const ANDROID_APK_URL = `${RELEASE_DL}/liquid-rust-android.apk`;
 const IOS_IPA_URL = `${RELEASE_DL}/liquid-rust-ios.ipa`;
 
@@ -71,6 +71,7 @@ class LiquidApp {
             metallic: 0.0,
             foamAmount: 0.35,
             animTime: 0.0,
+            lightMode: false,
         };
 
         // Pointer interaction state
@@ -242,6 +243,36 @@ class LiquidApp {
     }
 
     initUI() {
+        // Studio Theme (Dark / Light)
+        const applyTheme = (theme, persist = false) => {
+            const isLight = theme === 'light';
+            document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
+            this.renderOpts.lightMode = isLight;
+            const iconEl = document.getElementById('theme-icon');
+            const lblEl = document.getElementById('theme-label');
+            if (iconEl) iconEl.textContent = isLight ? '🌙' : '☀️';
+            if (lblEl) lblEl.textContent = isLight ? 'Dark' : 'Light';
+            if (persist) {
+                try {
+                    localStorage.setItem('liquidrust-theme', isLight ? 'light' : 'dark');
+                } catch (_) {}
+            }
+        };
+
+        let savedTheme = 'dark';
+        try {
+            const stored = localStorage.getItem('liquidrust-theme');
+            if (stored === 'light' || stored === 'dark') savedTheme = stored;
+        } catch (_) {}
+        applyTheme(savedTheme, false);
+
+        const btnTheme = document.getElementById('btn-theme');
+        if (btnTheme) {
+            btnTheme.addEventListener('click', () => {
+                applyTheme(this.renderOpts.lightMode ? 'dark' : 'light', true);
+            });
+        }
+
         // Studio Inspector Tabs
         const tabs = document.querySelectorAll('.studio-tab');
         const panes = document.querySelectorAll('.tab-pane');

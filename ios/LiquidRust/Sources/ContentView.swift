@@ -30,7 +30,7 @@ struct ContentView: View {
             }
             .animation(.spring(response: 0.34, dampingFraction: 0.80), value: showInspectorSheet)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(cfg.lightTheme ? .light : .dark)
         .task {
             await updater.checkOnLaunchIfNeeded()
         }
@@ -46,7 +46,7 @@ struct ContentView: View {
                 .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.54)))
         }
         .sheet(isPresented: $updater.showUpdateSheet) {
-            LiquidGlassUpdateSheet(updater: updater)
+            LiquidGlassUpdateSheet(updater: updater, lightTheme: cfg.lightTheme)
                 .presentationDetents([.fraction(0.52), .large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(34)
@@ -74,7 +74,7 @@ struct ContentView: View {
                     Text(telemetryLabel)
                         .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(Color.white.opacity(0.95))
+                        .foregroundStyle(cfg.lightTheme ? Color(red: 0.08, green: 0.14, blue: 0.24) : Color.white.opacity(0.95))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -97,7 +97,7 @@ struct ContentView: View {
                         Text("v\(updater.latestRelease?.version ?? "")")
                             .font(.system(size: 12.5, weight: .bold, design: .rounded))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(cfg.lightTheme ? Color(red: 0.03, green: 0.30, blue: 0.22) : .white)
                     .padding(.horizontal, 12)
                     .frame(height: 40)
                     .liquidGlass(
@@ -120,12 +120,20 @@ struct ContentView: View {
                     Text(cfg.is2D ? "2D" : "3D")
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(cfg.lightTheme ? (!cfg.is2D ? Color(red: 0.04, green: 0.28, blue: 0.62) : Color(red: 0.09, green: 0.15, blue: 0.25)) : .white)
                 .padding(.horizontal, 13)
                 .frame(height: 40)
                 .liquidGlass(cornerRadius: 20, isActive: !cfg.is2D)
             }
             .buttonStyle(LiquidGlassPressStyle())
+
+            // Studio Theme Toggle Orb (Light <-> Dark)
+            LiquidGlassOrbButton(
+                systemImage: cfg.lightTheme ? "moon.fill" : "sun.max.fill",
+                size: 40
+            ) {
+                cfg.lightTheme.toggle()
+            }
 
             // Hardware Gyro / Gravity Tilt Orb
             LiquidGlassOrbButton(
@@ -186,7 +194,7 @@ struct ContentView: View {
             } label: {
                 Image(systemName: cfg.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(cfg.lightTheme ? Color(red: 0.03, green: 0.24, blue: 0.54) : .white)
                     .frame(width: 54, height: 54)
                     .liquidGlass(
                         cornerRadius: 27,
@@ -213,7 +221,7 @@ private struct LiquidGlassInspectorSheet: View {
             HStack(spacing: 10) {
                 Text("Liquid Rust")
                     .font(.system(size: 19, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
 
                 Spacer()
 
@@ -225,7 +233,7 @@ private struct LiquidGlassInspectorSheet: View {
                 } label: {
                     Label("Step", systemImage: "forward.frame.fill")
                         .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 12)
                         .frame(height: 34)
                         .liquidGlass(cornerRadius: 17)
@@ -239,7 +247,7 @@ private struct LiquidGlassInspectorSheet: View {
                 } label: {
                     Label("Fit", systemImage: "viewfinder")
                         .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 12)
                         .frame(height: 34)
                         .liquidGlass(cornerRadius: 17)
@@ -278,7 +286,7 @@ private struct LiquidGlassInspectorSheet: View {
                 .padding(.bottom, 28)
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(cfg.lightTheme ? .light : .dark)
     }
 
     // MARK: Tab 1 — Scene
@@ -287,7 +295,7 @@ private struct LiquidGlassInspectorSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Scene Preset")
                 .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.65))
+                .foregroundStyle(.secondary)
                 .padding(.leading, 4)
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -331,7 +339,7 @@ private struct LiquidGlassInspectorSheet: View {
 
                 Text(String(format: "Kernel smoothing radius h: %.3f m", cfg.smoothingH))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .foregroundStyle(.secondary)
             }
 
             LiquidGlassCard("Time Scale") {
@@ -354,13 +362,13 @@ private struct LiquidGlassInspectorSheet: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Sphere Collider")
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Text("Interactive solid obstacle inside chamber")
                             .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.58))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .tint(Color(red: 0.30, green: 0.80, blue: 1.0))
+                .tint(cfg.lightTheme ? Color(red: 0.05, green: 0.45, blue: 0.86) : Color(red: 0.30, green: 0.80, blue: 1.0))
 
                 if cfg.obstacleEnabled {
                     LiquidGlassSlider(label: "Horizontal X", value: $cfg.obstacleX, range: -0.55...0.55, format: "%.2f m")
@@ -376,10 +384,10 @@ private struct LiquidGlassInspectorSheet: View {
                              ? "Update Available · v\(updater.latestRelease?.version ?? "")"
                              : "Installed · v\(updater.currentVersion)")
                             .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Text("GitHub Releases auto-check")
                             .font(.system(size: 11.5, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.58))
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
                     LiquidGlassChip(
@@ -404,24 +412,25 @@ private struct LiquidGlassInspectorSheet: View {
     // MARK: Tab 2 — Physics
 
     private var physicsPane: some View {
-        VStack(spacing: 14) {
+        let accentTint = cfg.lightTheme ? Color(red: 0.05, green: 0.45, blue: 0.86) : Color(red: 0.30, green: 0.80, blue: 1.0)
+        return VStack(spacing: 14) {
             LiquidGlassCard {
                 Toggle(isOn: $cfg.tiltGravityEnabled) {
                     HStack(spacing: 10) {
                         Image(systemName: "gyroscope")
                             .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.36, green: 0.84, blue: 1.0))
+                            .foregroundStyle(accentTint)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Motion Tilt Gravity")
                                 .font(.system(size: 14.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.primary)
                             Text("Tilt your iPhone or iPad to pour and slosh liquid")
                                 .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.60))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .tint(Color(red: 0.30, green: 0.80, blue: 1.0))
+                .tint(accentTint)
             }
 
             LiquidGlassCard("Fluid Dynamics") {
@@ -436,10 +445,30 @@ private struct LiquidGlassInspectorSheet: View {
     // MARK: Tab 3 — Appearance
 
     private var appearancePane: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let accentTint = cfg.lightTheme ? Color(red: 0.05, green: 0.45, blue: 0.86) : Color(red: 0.30, green: 0.80, blue: 1.0)
+        return VStack(alignment: .leading, spacing: 14) {
+            LiquidGlassCard {
+                Toggle(isOn: $cfg.lightTheme) {
+                    HStack(spacing: 10) {
+                        Image(systemName: cfg.lightTheme ? "sun.max.fill" : "moon.stars.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(accentTint)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Light Theme")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.primary)
+                            Text("Bright daylight studio backdrop and light Liquid Glass")
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .tint(accentTint)
+            }
+
             Text("Liquid Material")
                 .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.65))
+                .foregroundStyle(.secondary)
                 .padding(.leading, 4)
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -479,8 +508,8 @@ private struct LiquidGlassInspectorSheet: View {
 
                 Toggle("Smooth Liquid Surface (SSFR)", isOn: $cfg.liquidSurface)
                     .font(.system(size: 13.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white)
-                    .tint(Color(red: 0.30, green: 0.80, blue: 1.0))
+                    .foregroundStyle(.primary)
+                    .tint(accentTint)
 
                 if cfg.liquidSurface {
                     LiquidGlassSlider(label: "Liquid Fusion", value: $cfg.liquidFusion, range: 0.0...1.0, format: "%.2f")
@@ -488,8 +517,8 @@ private struct LiquidGlassInspectorSheet: View {
 
                 Toggle("Fresnel Sky-Rim & Sun Specular", isOn: $cfg.litSpheres)
                     .font(.system(size: 13.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white)
-                    .tint(Color(red: 0.30, green: 0.80, blue: 1.0))
+                    .foregroundStyle(.primary)
+                    .tint(accentTint)
             }
 
             LiquidGlassCard("Surface Texture") {
@@ -521,22 +550,27 @@ private struct LiquidGlassInspectorSheet: View {
 
 private struct LiquidGlassUpdateSheet: View {
     @ObservedObject var updater: AppUpdater
+    var lightTheme: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let accentCol = lightTheme ? Color(red: 0.05, green: 0.45, blue: 0.86) : Color(red: 0.30, green: 0.85, blue: 1.0)
+        let greenCol = lightTheme ? Color(red: 0.04, green: 0.54, blue: 0.32) : Color(red: 0.36, green: 0.96, blue: 0.68)
+        let redCol = lightTheme ? Color(red: 0.78, green: 0.14, blue: 0.18) : Color(red: 1.0, green: 0.55, blue: 0.55)
+
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(Color(red: 0.30, green: 0.85, blue: 1.0))
+                    .foregroundStyle(accentCol)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(updater.hasUpdateAvailable ? "Update Available" : "Software Updates")
                         .font(.system(size: 18, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text("Installed v\(updater.currentVersion)")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.60))
+                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
@@ -551,32 +585,32 @@ private struct LiquidGlassUpdateSheet: View {
                 LiquidGlassCard {
                     HStack(spacing: 12) {
                         ProgressView()
-                            .tint(.white)
+                            .tint(accentCol)
                         Text("Checking GitHub Releases…")
                             .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                     }
                 }
             } else if let err = updater.errorMessage {
                 LiquidGlassCard {
                     Text(err)
                         .font(.system(size: 13, design: .rounded))
-                        .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
+                        .foregroundStyle(redCol)
                 }
             } else if let rel = updater.latestRelease {
                 LiquidGlassCard(rel.title) {
                     HStack(spacing: 8) {
                         Text("Latest: v\(rel.version)")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(rel.isNewer ? Color(red: 0.36, green: 0.96, blue: 0.68) : Color.white.opacity(0.85))
+                            .foregroundStyle(rel.isNewer ? greenCol : Color.primary)
                         Text("· \(rel.formattedSize)")
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(Color.white.opacity(0.55))
+                            .foregroundStyle(.secondary)
                         Spacer()
                         if !rel.isNewer {
                             Text("Up to date ✓")
                                 .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color(red: 0.36, green: 0.96, blue: 0.68))
+                                .foregroundStyle(greenCol)
                         }
                     }
 
@@ -584,7 +618,7 @@ private struct LiquidGlassUpdateSheet: View {
                         ScrollView(.vertical, showsIndicators: true) {
                             Text(rel.notes)
                                 .font(.system(size: 12.5, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.80))
+                                .foregroundStyle(Color.primary.opacity(0.85))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .frame(maxHeight: 130)
@@ -617,6 +651,6 @@ private struct LiquidGlassUpdateSheet: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 20)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(lightTheme ? .light : .dark)
     }
 }

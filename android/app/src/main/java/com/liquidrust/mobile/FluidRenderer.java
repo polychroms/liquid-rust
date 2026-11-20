@@ -29,7 +29,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
         final int prog;
         final int uView, uProj, uRadius, uInvRho0, uColorMode, uColorMap;
         final int uLightDir, uLitSpheres, uTexMode, uTexStrength, uAnimTime;
-        final int uShallowColor, uDeepColor, uOptics, uRefraction, uFoamAmount;
+        final int uShallowColor, uDeepColor, uOptics, uRefraction, uFoamAmount, uLightMode;
 
         ParticleProg(int prog) {
             this.prog = prog;
@@ -49,6 +49,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
             uOptics = GLES30.glGetUniformLocation(prog, "u_optics");
             uRefraction = GLES30.glGetUniformLocation(prog, "u_refraction");
             uFoamAmount = GLES30.glGetUniformLocation(prog, "u_foam_amount");
+            uLightMode = GLES30.glGetUniformLocation(prog, "u_light_mode");
         }
     }
 
@@ -70,14 +71,14 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
 
     // 5-Pass Screen-Space Fluid Rendering (SSFR) + Translucent Refraction Pipeline
     private boolean ssfrReady = false;
-    private int progSsfrBg, uBgTime, uBgWaterColor, uBgIs2D;
+    private int progSsfrBg, uBgTime, uBgWaterColor, uBgIs2D, uBgLightMode;
     private int progSsfrDepth, uDepView, uDepProj, uDepRadius, uDepInvRho0, uDepColorMode, uDepFusion, uDepScale;
     private int progSsfrThick, uThkView, uThkProj, uThkRadius, uThkInvRho0, uThkColorMode, uThkWeight;
     private int progSsfrBlur, uBlurDepthTex, uBlurTexel, uBlurDir, uBlurFusion, uBlurStride, uBlurThresh;
     private int progSsfrComp, uCompBgTex, uCompSmoothTex, uCompRawTex, uCompThickTex;
     private int uCompTexel, uCompTanHalfFov, uCompAspect, uCompDepthScale, uCompFusion;
     private int uCompShallow, uCompDeep, uCompOptics, uCompRefraction, uCompFoam;
-    private int uCompLightDir, uCompLitSpheres, uCompColorMode, uCompColorMap;
+    private int uCompLightDir, uCompLitSpheres, uCompColorMode, uCompColorMap, uCompLightMode;
 
     private int quadVao;
     private int ssfrW = 0, ssfrH = 0, thickW = 0, thickH = 0;
@@ -182,6 +183,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
             uBgTime = GLES30.glGetUniformLocation(progSsfrBg, "u_time");
             uBgWaterColor = GLES30.glGetUniformLocation(progSsfrBg, "u_water_color");
             uBgIs2D = GLES30.glGetUniformLocation(progSsfrBg, "u_is_2d");
+            uBgLightMode = GLES30.glGetUniformLocation(progSsfrBg, "u_light_mode");
 
             progSsfrDepth = ShaderUtils.buildRenderProgram(assets, "shaders/ssfr_sprite.vert", "shaders/ssfr_depth.frag", null);
             uDepView = GLES30.glGetUniformLocation(progSsfrDepth, "u_view");
@@ -227,6 +229,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
             uCompLitSpheres = GLES30.glGetUniformLocation(progSsfrComp, "u_lit_spheres");
             uCompColorMode = GLES30.glGetUniformLocation(progSsfrComp, "u_color_mode");
             uCompColorMap = GLES30.glGetUniformLocation(progSsfrComp, "u_color_map");
+            uCompLightMode = GLES30.glGetUniformLocation(progSsfrComp, "u_light_mode");
 
             ssfrReady = true;
         } catch (Throwable t) {
@@ -350,8 +353,12 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
             GLES30.glViewport(0, 0, vpWidth, vpHeight);
             GLES30.glDepthMask(true);
-            // Material 3 Dark Neutral Slate (#0E141B)
-            GLES30.glClearColor(14.0f / 255.0f, 20.0f / 255.0f, 27.0f / 255.0f, 1.0f);
+            if (cfg.lightTheme) {
+                GLES30.glClearColor(232.0f / 255.0f, 238.0f / 255.0f, 246.0f / 255.0f, 1.0f);
+            } else {
+                // Material 3 Dark Neutral Slate (#0E141B)
+                GLES30.glClearColor(14.0f / 255.0f, 20.0f / 255.0f, 27.0f / 255.0f, 1.0f);
+            }
             GLES30.glClearDepthf(1.0f);
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT | GLES30.GL_DEPTH_BUFFER_BIT);
 
@@ -471,11 +478,19 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA);
 
         if (gridVerts > 0) {
-            GLES30.glUniform4f(uLineColor, 0.22f, 0.29f, 0.38f, 0.34f);
+            if (cfg.lightTheme) {
+                GLES30.glUniform4f(uLineColor, 0.34f, 0.43f, 0.56f, 0.36f);
+            } else {
+                GLES30.glUniform4f(uLineColor, 0.22f, 0.29f, 0.38f, 0.34f);
+            }
             GLES30.glDrawArrays(GLES30.GL_LINES, 0, gridVerts);
         }
         if (wireVerts > 0) {
-            GLES30.glUniform4f(uLineColor, 0.56f, 0.76f, 0.96f, 0.36f);
+            if (cfg.lightTheme) {
+                GLES30.glUniform4f(uLineColor, 0.10f, 0.36f, 0.70f, 0.62f);
+            } else {
+                GLES30.glUniform4f(uLineColor, 0.56f, 0.76f, 0.96f, 0.36f);
+            }
             GLES30.glDrawArrays(GLES30.GL_LINES, gridVerts, wireVerts);
         }
 
@@ -511,6 +526,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
         GLES30.glUniform4f(p.uOptics, cfg.ior, cfg.roughness, cfg.specular, cfg.metallic);
         GLES30.glUniform1f(p.uRefraction, cfg.refraction);
         GLES30.glUniform1f(p.uFoamAmount, cfg.foamAmount);
+        GLES30.glUniform1i(p.uLightMode, cfg.lightTheme ? 1 : 0);
 
         if (active2D) {
             GLES30.glDisable(GLES30.GL_DEPTH_TEST);
@@ -658,6 +674,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
         GLES30.glUniform1f(uBgTime, animTime);
         GLES30.glUniform3f(uBgWaterColor, cfg.shallowR, cfg.shallowG, cfg.shallowB);
         GLES30.glUniform1i(uBgIs2D, active2D ? 1 : 0);
+        GLES30.glUniform1i(uBgLightMode, cfg.lightTheme ? 1 : 0);
         GLES30.glBindVertexArray(quadVao);
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
         GLES30.glBindVertexArray(0);
@@ -795,6 +812,7 @@ public final class FluidRenderer implements GLSurfaceView.Renderer {
         GLES30.glUniform1i(uCompLitSpheres, cfg.litSpheres ? 1 : 0);
         GLES30.glUniform1i(uCompColorMode, cfg.colorMode);
         GLES30.glUniform1i(uCompColorMap, cfg.colorMap);
+        GLES30.glUniform1i(uCompLightMode, cfg.lightTheme ? 1 : 0);
 
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3);
 

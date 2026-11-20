@@ -46,6 +46,7 @@ private struct SsfrUniformsGPU {
     var optics:    SIMD4<Float>
     var light_inv: SIMD4<Float>
     var modes:     SIMD4<Int32>
+    var extra:     SIMD4<Float>
 }
 
 // Interactive Metal Touch View forwarding multi-touch gestures & 120Hz ProMotion
@@ -738,8 +739,12 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
             animTime += min(frameDt, 1.0 / 45.0) * cfg.simSpeed
         }
 
-        // Deep Obsidian Slate background complementing Liquid Glass UI
-        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.043, green: 0.062, blue: 0.094, alpha: 1.0)
+        // Studio Dark Slate vs Daylight Backdrop complementing Liquid Glass UI
+        if cfg.lightTheme {
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.902, green: 0.925, blue: 0.961, alpha: 1.0)
+        } else {
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.043, green: 0.062, blue: 0.094, alpha: 1.0)
+        }
         rpd.colorAttachments[0].loadAction = .clear
         rpd.colorAttachments[0].storeAction = .store
         rpd.depthAttachment.clearDepth = 1.0
@@ -937,7 +942,7 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
             modes: SIMD4<Int32>(Int32(cfg.colorMode), Int32(cfg.colorMap), cfg.litSpheres ? 1 : 0, Int32(cfg.texMode)),
             light_foam: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, cfg.foamAmount),
             shallow_refr: SIMD4<Float>(cfg.shallowRGB.x, cfg.shallowRGB.y, cfg.shallowRGB.z, cfg.refraction),
-            deep_pad: SIMD4<Float>(cfg.deepRGB.x, cfg.deepRGB.y, cfg.deepRGB.z, 0.0),
+            deep_pad: SIMD4<Float>(cfg.deepRGB.x, cfg.deepRGB.y, cfg.deepRGB.z, cfg.lightTheme ? 1.0 : 0.0),
             optics: SIMD4<Float>(cfg.ior, cfg.roughness, cfg.specular, cfg.metallic),
             line_color: lineColor
         )
@@ -1031,13 +1036,19 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
         enc.setVertexBuffer(bufWire, offset: 0, index: 0)
 
         if gridVerts > 0 {
-            var uGrid = makeRenderUniforms(lineColor: SIMD4<Float>(0.32, 0.45, 0.62, 0.28))
+            let gridCol = cfg.lightTheme
+                ? SIMD4<Float>(0.34, 0.43, 0.56, 0.34)
+                : SIMD4<Float>(0.32, 0.45, 0.62, 0.28)
+            var uGrid = makeRenderUniforms(lineColor: gridCol)
             enc.setVertexBytes(&uGrid, length: MemoryLayout<RenderUniformsGPU>.stride, index: 1)
             enc.setFragmentBytes(&uGrid, length: MemoryLayout<RenderUniformsGPU>.stride, index: 0)
             enc.drawPrimitives(type: .line, vertexStart: 0, vertexCount: gridVerts)
         }
         if wireVerts > 0 {
-            var uWire = makeRenderUniforms(lineColor: SIMD4<Float>(0.68, 0.86, 1.00, 0.34))
+            let wireCol = cfg.lightTheme
+                ? SIMD4<Float>(0.10, 0.36, 0.70, 0.62)
+                : SIMD4<Float>(0.68, 0.86, 1.00, 0.34)
+            var uWire = makeRenderUniforms(lineColor: wireCol)
             enc.setVertexBytes(&uWire, length: MemoryLayout<RenderUniformsGPU>.stride, index: 1)
             enc.setFragmentBytes(&uWire, length: MemoryLayout<RenderUniformsGPU>.stride, index: 0)
             enc.drawPrimitives(type: .line, vertexStart: gridVerts, vertexCount: wireVerts)
@@ -1157,7 +1168,8 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
             deep: SIMD4<Float>(cfg.deepRGB.x, cfg.deepRGB.y, cfg.deepRGB.z, cfg.foamAmount),
             optics: SIMD4<Float>(cfg.ior, cfg.roughness, cfg.specular, cfg.metallic),
             light_inv: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, invRestDensity),
-            modes: SIMD4<Int32>(Int32(cfg.colorMode), Int32(cfg.colorMap), cfg.litSpheres ? 1 : 0, active2D ? 1 : 0)
+            modes: SIMD4<Int32>(Int32(cfg.colorMode), Int32(cfg.colorMap), cfg.litSpheres ? 1 : 0, active2D ? 1 : 0),
+            extra: SIMD4<Float>(cfg.lightTheme ? 1.0 : 0.0, 0.0, 0.0, 0.0)
         )
 
         // Pass A: Studio Background + Caustics + Tank & Collider Wireframes
@@ -1165,7 +1177,11 @@ final class MetalFluidEngine: NSObject, MTKViewDelegate {
         rpdBg.colorAttachments[0].texture = tBg
         rpdBg.colorAttachments[0].loadAction = .clear
         rpdBg.colorAttachments[0].storeAction = .store
-        rpdBg.colorAttachments[0].clearColor = MTLClearColor(red: 0.043, green: 0.062, blue: 0.094, alpha: 1.0)
+        if cfg.lightTheme {
+            rpdBg.colorAttachments[0].clearColor = MTLClearColor(red: 0.902, green: 0.925, blue: 0.961, alpha: 1.0)
+        } else {
+            rpdBg.colorAttachments[0].clearColor = MTLClearColor(red: 0.043, green: 0.062, blue: 0.094, alpha: 1.0)
+        }
         rpdBg.depthAttachment.texture = tDepthZ
         rpdBg.depthAttachment.loadAction = .clear
         rpdBg.depthAttachment.storeAction = .dontCare

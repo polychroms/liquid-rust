@@ -99,6 +99,9 @@ final class SimulationConfig: ObservableObject {
     @Published var obstacleR: Float = 0.20
 
     // Optical Shading & Procedural Texture
+    @Published var lightTheme: Bool = UserDefaults.standard.bool(forKey: "liquidrust_light_theme") {
+        didSet { UserDefaults.standard.set(lightTheme, forKey: "liquidrust_light_theme") }
+    }
     @Published var liquidSurface: Bool = true
     @Published var liquidFusion: Float = 1.0
     @Published var materialIndex: Int = 0

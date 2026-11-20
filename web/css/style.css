@@ -947,3 +947,163 @@ input[type="range"]::-moz-range-thumb:hover {
         max-height: 46vh;
     }
 }
+
+/* Header Theme Toggle Button & Light Studio Theme */
+.btn-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: var(--radius-xs);
+    background: rgba(148, 175, 214, 0.10);
+    border: 1px solid var(--panel-border);
+    color: var(--text-primary);
+    font-family: var(--font);
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, transform 0.1s ease;
+}
+
+.btn-theme-toggle:hover {
+    background: rgba(58, 216, 247, 0.16);
+    border-color: var(--panel-border-strong);
+    transform: translateY(-1px);
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --bg-dark: #e6ecf5;
+    --panel-bg: rgba(250, 252, 255, 0.90);
+    --section-bg: rgba(239, 244, 252, 0.84);
+    --panel-border: rgba(34, 58, 94, 0.15);
+    --panel-border-strong: rgba(18, 114, 206, 0.42);
+    --accent-blue: #126ad4;
+    --accent-cyan: #0875c2;
+    --accent-emerald: #0c8a52;
+    --accent-orange: #c96808;
+    --text-primary: #142238;
+    --text-secondary: #435774;
+    --text-muted: #687c99;
+    --input-bg: rgba(255, 255, 255, 0.92);
+}
+
+:root[data-theme="light"] .app-header,
+:root[data-theme="light"] .sidebar {
+    box-shadow: 0 10px 28px rgba(18, 38, 72, 0.12);
+}
+
+:root[data-theme="light"] .studio-tag {
+    background: rgba(18, 106, 212, 0.08);
+    color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .version-tag {
+    color: #0875c2;
+    background: rgba(8, 117, 194, 0.10);
+    border-color: rgba(8, 117, 194, 0.28);
+}
+
+:root[data-theme="light"] .version-tag:hover {
+    background: #0875c2;
+    color: #fff;
+}
+
+:root[data-theme="light"] .btn-header-dl {
+    background: rgba(18, 106, 212, 0.11);
+    border-color: rgba(18, 106, 212, 0.34);
+    color: #0a58b8;
+}
+
+:root[data-theme="light"] .btn-header-dl:hover {
+    background: rgba(18, 106, 212, 0.20);
+    color: #063d86;
+}
+
+:root[data-theme="light"] .stat-badge {
+    background: rgba(232, 239, 249, 0.88);
+}
+
+:root[data-theme="light"] .studio-tabs {
+    background: rgba(226, 234, 246, 0.86);
+}
+
+:root[data-theme="light"] .studio-tab.active,
+:root[data-theme="light"] .btn-chip.active {
+    background: #126ad4;
+    border-color: #0d57b4;
+    color: #fff;
+}
+
+:root[data-theme="light"] .btn-secondary:hover {
+    background: rgba(214, 226, 244, 0.96);
+    border-color: rgba(34, 58, 94, 0.30);
+}
+
+:root[data-theme="light"] select option {
+    background-color: #f4f7fc;
+    color: var(--text-primary);
+}
+
+:root[data-theme="light"] .panel-header {
+    background: rgba(20, 44, 80, 0.03);
+    border-bottom-color: rgba(34, 58, 94, 0.10);
+}
+
+:root[data-theme="light"] .panel-header:hover {
+    background: rgba(20, 44, 80, 0.06);
+}
+
+:root[data-theme="light"] .sidebar-scroll {
+    scrollbar-color: rgba(34, 58, 94, 0.24) transparent;
+}
+
+:root[data-theme="light"] .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(34, 58, 94, 0.24);
+}
+
+:root[data-theme="light"] input[type="range"]::-webkit-slider-thumb,
+:root[data-theme="light"] input[type="range"]::-moz-range-thumb {
+    border-color: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 4px rgba(18, 42, 78, 0.28);
+}
+
+:root[data-theme="light"] .checkbox-group input[type="checkbox"] {
+    border-color: rgba(34, 58, 94, 0.32);
+}
+
+:root[data-theme="light"] .checkbox-group input[type="checkbox"]::before {
+    background: #ffffff;
+}
+
+:root[data-theme="light"] .download-card {
+    background: linear-gradient(155deg, rgba(235, 243, 255, 0.95), rgba(224, 236, 252, 0.96));
+    border-color: rgba(18, 106, 212, 0.25);
+}
+
+:root[data-theme="light"] .os-pill {
+    background: rgba(8, 117, 194, 0.11);
+    border-color: rgba(8, 117, 194, 0.26);
+    color: #0875c2;
+}
+
+:root[data-theme="light"] .dl-alt-link {
+    background: rgba(255, 255, 255, 0.78);
+}
+
+:root[data-theme="light"] .interaction-hints {
+    background: rgba(242, 246, 253, 0.88);
+}
+
+:root[data-theme="light"] .badge-hint.attract {
+    background: rgba(18, 106, 212, 0.14);
+    color: #0d58b8;
+    border-color: rgba(18, 106, 212, 0.32);
+}
+
+:root[data-theme="light"] .badge-hint.repel {
+    background: rgba(201, 104, 8, 0.14);
+    color: #a34f00;
+    border-color: rgba(201, 104, 8, 0.32);
+}

@@ -36,7 +36,7 @@ final class AppUpdater: ObservableObject {
     private var hasCheckedStartup: Bool = false
 
     var currentVersion: String {
-        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.4.0"
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.4.1"
     }
 
     var hasUpdateAvailable: Bool {

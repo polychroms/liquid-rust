@@ -1009,7 +1009,10 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
         // Studio overhead sky / horizon reflection
         let refl_y = clamp(0.5 + 0.5 * n.y, 0.0, 1.0);
-        let sky_env = mix(vec3<f32>(0.08, 0.14, 0.24), vec3<f32>(0.55, 0.78, 0.98), pow(refl_y, 1.5));
+        let light_mode = clamp(camera.foam_params.y, 0.0, 1.0);
+        let sky_low = mix(vec3<f32>(0.08, 0.14, 0.24), vec3<f32>(0.46, 0.64, 0.86), light_mode);
+        let sky_hi = mix(vec3<f32>(0.55, 0.78, 0.98), vec3<f32>(0.92, 0.96, 1.00), light_mode);
+        let sky_env = mix(sky_low, sky_hi, pow(refl_y, 1.5));
         let body_lit = base_color * (0.28 + 0.18 * hemi + 0.62 * ndotl * (1.0 - 0.65 * metallic));
 
         // Subsurface refraction glow near thin silhouettes
@@ -1108,14 +1111,16 @@ fn bg_caustic(uv: vec2<f32>, t: f32) -> f32 {
 @fragment
 fn bg_fs(in: QuadOut) -> @location(0) vec4<f32> {
     let y_up = 1.0 - in.uv.y;
-    let low = vec3<f32>(0.028, 0.043, 0.072);
-    let high = vec3<f32>(0.062, 0.095, 0.155);
+    let light_mode = clamp(u.light.w, 0.0, 1.0);
+    let low = mix(vec3<f32>(0.028, 0.043, 0.072), vec3<f32>(0.790, 0.845, 0.920), light_mode);
+    let high = mix(vec3<f32>(0.062, 0.095, 0.155), vec3<f32>(0.925, 0.955, 0.985), light_mode);
     var bg = mix(low, high, smoothstep(0.0, 1.0, y_up));
     let floor_mask = smoothstep(0.55, 0.05, y_up);
     let t = u.params0.w;
     let c = bg_caustic(in.uv * vec2<f32>(1.4, 1.1), t) * 0.6
           + bg_caustic(in.uv * 1.9 + vec2<f32>(0.37, -0.21), -t * 0.8) * 0.4;
-    bg += mix(u.shallow.xyz, vec3<f32>(0.75, 0.94, 1.0), 0.35) * c * floor_mask * 0.09;
+    let c_tint = mix(mix(u.shallow.xyz, vec3<f32>(0.75, 0.94, 1.0), 0.35), vec3<f32>(0.28, 0.64, 0.92), light_mode);
+    bg += c_tint * c * floor_mask * mix(0.09, 0.06, light_mode);
     return vec4<f32>(bg, 1.0);
 }
 
@@ -1378,8 +1383,11 @@ fn composite_fs(in: QuadOut) -> @location(0) vec4<f32> {
     let shallow_water = mix(refr_bg * transmittance + deep_tint * (vec3<f32>(1.0) - transmittance) * 0.88, deep_tint, metallic);
 
     let refl_dir = reflect(-view_dir, normal);
+    let light_mode = clamp(u.light.w, 0.0, 1.0);
     let sky_t = pow(clamp(refl_dir.y * 0.5 + 0.5, 0.0, 1.0), 1.45);
-    var sky_refl = mix(vec3<f32>(0.09, 0.17, 0.30), vec3<f32>(0.76, 0.90, 1.0), sky_t);
+    let sky_low = mix(vec3<f32>(0.09, 0.17, 0.30), vec3<f32>(0.50, 0.68, 0.88), light_mode);
+    let sky_hi = mix(vec3<f32>(0.76, 0.90, 1.0), vec3<f32>(0.95, 0.98, 1.00), light_mode);
+    var sky_refl = mix(sky_low, sky_hi, sky_t);
     let softbox = pow(clamp(dot(refl_dir, normalize(vec3<f32>(-0.20, 0.82, 0.38))), 0.0, 1.0), 14.0);
     sky_refl += vec3<f32>(0.72, 0.84, 0.96) * softbox;
     sky_refl *= mix(vec3<f32>(1.0), shallow, metallic);

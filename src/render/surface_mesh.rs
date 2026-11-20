@@ -464,6 +464,7 @@ impl CliRenderQuality {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnvironmentPreset {
     StudioDark,
+    StudioLight,
     DaylightSky,
     GoldenSunset,
     ArcticLab,
@@ -473,6 +474,7 @@ pub enum EnvironmentPreset {
 impl EnvironmentPreset {
     pub const ALL: &'static [EnvironmentPreset] = &[
         EnvironmentPreset::StudioDark,
+        EnvironmentPreset::StudioLight,
         EnvironmentPreset::DaylightSky,
         EnvironmentPreset::GoldenSunset,
         EnvironmentPreset::ArcticLab,
@@ -482,6 +484,7 @@ impl EnvironmentPreset {
     pub fn name(&self) -> &'static str {
         match self {
             EnvironmentPreset::StudioDark => "Studio Dark (Default)",
+            EnvironmentPreset::StudioLight => "Studio Light (Daylight)",
             EnvironmentPreset::DaylightSky => "Daylight Sky (Clear Noon)",
             EnvironmentPreset::GoldenSunset => "Golden Sunset (Warm Rim)",
             EnvironmentPreset::ArcticLab => "Arctic Lab (Clean Slate)",
@@ -492,6 +495,7 @@ impl EnvironmentPreset {
     pub fn slug(&self) -> &'static str {
         match self {
             EnvironmentPreset::StudioDark => "studio",
+            EnvironmentPreset::StudioLight => "light",
             EnvironmentPreset::DaylightSky => "daylight",
             EnvironmentPreset::GoldenSunset => "sunset",
             EnvironmentPreset::ArcticLab => "arctic",
@@ -502,12 +506,18 @@ impl EnvironmentPreset {
     pub fn from_slug(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "studio" | "dark" | "studio-dark" | "default" => Some(EnvironmentPreset::StudioDark),
+            "light" | "studio-light" | "bright" | "white" => Some(EnvironmentPreset::StudioLight),
             "daylight" | "day" | "sky" | "noon" => Some(EnvironmentPreset::DaylightSky),
             "sunset" | "golden" | "dusk" => Some(EnvironmentPreset::GoldenSunset),
-            "arctic" | "lab" | "light" => Some(EnvironmentPreset::ArcticLab),
+            "arctic" | "lab" => Some(EnvironmentPreset::ArcticLab),
             "abyssal" | "deep" | "midnight" => Some(EnvironmentPreset::AbyssalDeep),
             _ => None,
         }
+    }
+
+    /// Whether this studio backdrop uses a bright light canvas (used to adapt grid & wireframe contrast).
+    pub fn is_light_backdrop(&self) -> bool {
+        matches!(self, EnvironmentPreset::StudioLight)
     }
 
     /// Background sky linear-space `(nadir_low, zenith_high)` gradient.
@@ -515,6 +525,9 @@ impl EnvironmentPreset {
         match self {
             EnvironmentPreset::StudioDark => {
                 (Vec3::new(0.012, 0.016, 0.026), Vec3::new(0.036, 0.052, 0.082))
+            }
+            EnvironmentPreset::StudioLight => {
+                (Vec3::new(0.560, 0.630, 0.740), Vec3::new(0.860, 0.910, 0.970))
             }
             EnvironmentPreset::DaylightSky => {
                 (Vec3::new(0.090, 0.150, 0.250), Vec3::new(0.035, 0.095, 0.240))
@@ -535,6 +548,7 @@ impl EnvironmentPreset {
     pub fn viewport_bg_rgb8(&self) -> [u8; 3] {
         match self {
             EnvironmentPreset::StudioDark => [11, 13, 19],
+            EnvironmentPreset::StudioLight => [226, 232, 240],
             EnvironmentPreset::DaylightSky => [24, 42, 72],
             EnvironmentPreset::GoldenSunset => [30, 19, 24],
             EnvironmentPreset::ArcticLab => [34, 42, 54],
@@ -549,6 +563,11 @@ impl EnvironmentPreset {
                 Vec3::new(0.24, 0.36, 0.52),
                 Vec3::new(0.08, 0.16, 0.30),
                 Vec3::new(0.025, 0.032, 0.045),
+            ),
+            EnvironmentPreset::StudioLight => (
+                Vec3::new(0.86, 0.92, 0.99),
+                Vec3::new(0.62, 0.78, 0.96),
+                Vec3::new(0.45, 0.49, 0.56),
             ),
             EnvironmentPreset::DaylightSky => (
                 Vec3::new(0.55, 0.74, 0.95),

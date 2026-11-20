@@ -23,6 +23,7 @@ uniform vec3 u_light_dir;
 uniform int u_lit_spheres;
 uniform int u_color_mode;
 uniform int u_color_map;
+uniform int u_light_mode;
 
 out vec4 fragColor;
 
@@ -185,7 +186,9 @@ void main() {
 
     vec3 reflDir = reflect(-viewDir, normal);
     float skyT = pow(clamp(reflDir.y * 0.5 + 0.5, 0.0, 1.0), 1.45);
-    vec3 skyReflect = mix(vec3(0.09, 0.17, 0.30), vec3(0.76, 0.90, 1.0), skyT);
+    vec3 skyLow = (u_light_mode == 1) ? vec3(0.50, 0.68, 0.88) : vec3(0.09, 0.17, 0.30);
+    vec3 skyHi  = (u_light_mode == 1) ? vec3(0.95, 0.98, 1.00) : vec3(0.76, 0.90, 1.0);
+    vec3 skyReflect = mix(skyLow, skyHi, skyT);
     float softbox = pow(clamp(dot(reflDir, normalize(vec3(-0.20, 0.82, 0.38))), 0.0, 1.0), 14.0);
     skyReflect += vec3(0.72, 0.84, 0.96) * softbox;
     skyReflect *= mix(vec3(1.0), shallowCol, metallic);
