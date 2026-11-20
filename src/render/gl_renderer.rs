@@ -285,22 +285,74 @@ void main() {
 
             let particle_program = create_shader_program(gl, p_vs_src, p_fs_src)?;
 
-            // 2. Compile line shader
+            // 2. Compile line shader (supports volumetric underwater fog in SSFR Pass F2)
             let l_vs_src = r#"#version 330 core
 layout (location = 0) in vec3 a_pos;
 uniform mat4 u_view_proj;
+uniform mat4 u_view;
+out float v_eye_depth;
 
 void main() {
     gl_Position = u_view_proj * vec4(a_pos, 1.0);
+    vec4 eye_p = u_view * vec4(a_pos, 1.0);
+    v_eye_depth = max(-eye_p.z, 0.001);
 }
 "#;
 
             let l_fs_src = r#"#version 330 core
+in float v_eye_depth;
 uniform vec4 u_line_color;
+uniform int u_submerged;
+uniform sampler2D t_smooth_depth;
+uniform sampler2D t_thickness;
+uniform vec4 u_vp_rect;      // xy = viewport origin px, zw = 1 / viewport size px
+uniform vec3 u_shallow_color;
+uniform vec3 u_deep_color;
+uniform vec4 u_mat_params;   // x: opacity, y: absorption, z: foam_intensity, w: metallic
+uniform float u_exposure;
 out vec4 FragColor;
 
 void main() {
-    FragColor = u_line_color;
+    if (u_submerged == 0) {
+        FragColor = u_line_color;
+        return;
+    }
+
+    vec2 uv = clamp((gl_FragCoord.xy - u_vp_rect.xy) * u_vp_rect.zw, vec2(0.0005), vec2(0.9995));
+    vec4 d_s = texture(t_smooth_depth, uv);
+    if (d_s.a < 0.5) {
+        discard;
+    }
+
+    float fluid_d = d_s.r;
+    float thickness = max(texture(t_thickness, uv).r, 0.0);
+    float submerge_depth = max(v_eye_depth - fluid_d, 0.0);
+    float water_path = min(submerge_depth * 2.8, thickness * 1.25 + 0.04);
+
+    float opacity = clamp(u_mat_params.x, 0.0, 1.0);
+    float abs_k = max(u_mat_params.y, 0.05);
+    float metallic = clamp(u_mat_params.w, 0.0, 1.0);
+
+    float translucency = (1.0 - smoothstep(0.72, 0.99, opacity)) * (1.0 - smoothstep(0.30, 0.90, metallic));
+    float fog_rate = abs_k * (0.28 + 0.95 * opacity + 1.35 * metallic);
+    float transmit = exp(-fog_rate * water_path);
+    float fog_factor = 1.0 - transmit;
+
+    // Progressive tint from wireframe hue into depth-shaded liquid fog + ACES tone map matching SSFR composite
+    vec3 shallow_lin = pow(max(u_shallow_color, vec3(0.0)), vec3(2.2));
+    vec3 deep_lin = pow(max(u_deep_color, vec3(0.0)), vec3(2.2));
+    vec3 fog_lin = mix(shallow_lin, deep_lin, 1.0 - exp(-water_path * abs_k * 0.70))
+                 * 0.78 * max(u_exposure, 0.05);
+    vec3 fog_tone = clamp((fog_lin * (2.51 * fog_lin + 0.03)) / (fog_lin * (2.43 * fog_lin + 0.59) + 0.14), 0.0, 1.0);
+    vec3 fog_srgb = pow(fog_tone, vec3(1.0 / 2.2));
+
+    vec3 out_rgb = mix(u_line_color.rgb, fog_srgb, clamp(fog_factor * 0.78, 0.0, 0.82));
+    float min_vis = 0.18 * translucency;
+    float out_alpha = u_line_color.a * clamp(mix(min_vis, 1.0, transmit), 0.0, 1.0);
+    if (out_alpha <= 0.008) {
+        discard;
+    }
+    FragColor = vec4(out_rgb, out_alpha);
 }
 "#;
 
@@ -1340,12 +1392,8 @@ void main() {
             }
         }
 
-        let col = if self.env_preset.is_light_backdrop() {
-            [0.10, 0.36, 0.70, 0.74]
-        } else {
-            [0.34, 0.68, 0.96, 0.78]
-        };
-        self.draw_line_batch(gl, view_proj, col, 1.5, &self.line_scratch);
+        let col = self.wireframe_color();
+        self.draw_line_batch(gl, view_proj, col, 1.5, &self.line_scratch, None);
     }
 
     fn append_collider_lines(
@@ -1406,6 +1454,15 @@ void main() {
         }
     }
 
+    fn wireframe_color(&self) -> [f32; 4] {
+        if self.env_preset.is_light_backdrop() {
+            [0.10, 0.36, 0.70, 0.74]
+        } else {
+            [0.34, 0.68, 0.96, 0.78]
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     unsafe fn draw_line_batch(
         &self,
         gl: &Arc<glow::Context>,
@@ -1413,6 +1470,7 @@ void main() {
         color: [f32; 4],
         width: f32,
         lines: &[LineVertex],
+        submerged: Option<(Mat4, [i32; 4], &SurfaceMeshConfig, NativeTexture, NativeTexture)>,
     ) {
         if lines.is_empty() {
             return;
@@ -1421,10 +1479,68 @@ void main() {
         gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
         gl.use_program(Some(self.line_program));
 
-        let u_vp = gl.get_uniform_location(self.line_program, "u_view_proj");
-        let u_col = gl.get_uniform_location(self.line_program, "u_line_color");
-        gl.uniform_matrix_4_f32_slice(u_vp.as_ref(), false, &view_proj.to_cols_array());
-        gl.uniform_4_f32(u_col.as_ref(), color[0], color[1], color[2], color[3]);
+        let lp = self.line_program;
+        gl.uniform_matrix_4_f32_slice(
+            gl.get_uniform_location(lp, "u_view_proj").as_ref(),
+            false,
+            &view_proj.to_cols_array(),
+        );
+        gl.uniform_4_f32(
+            gl.get_uniform_location(lp, "u_line_color").as_ref(),
+            color[0],
+            color[1],
+            color[2],
+            color[3],
+        );
+
+        let is_submerged = submerged.is_some();
+        gl.uniform_1_i32(
+            gl.get_uniform_location(lp, "u_submerged").as_ref(),
+            i32::from(is_submerged),
+        );
+        if let Some((view, vp_rect, mesh_cfg, smooth_depth_tex, thick_tex)) = submerged {
+            gl.uniform_matrix_4_f32_slice(
+                gl.get_uniform_location(lp, "u_view").as_ref(),
+                false,
+                &view.to_cols_array(),
+            );
+            gl.uniform_4_f32(
+                gl.get_uniform_location(lp, "u_vp_rect").as_ref(),
+                vp_rect[0] as f32,
+                vp_rect[1] as f32,
+                1.0 / vp_rect[2].max(2) as f32,
+                1.0 / vp_rect[3].max(2) as f32,
+            );
+            gl.uniform_3_f32(
+                gl.get_uniform_location(lp, "u_shallow_color").as_ref(),
+                mesh_cfg.shallow_color[0],
+                mesh_cfg.shallow_color[1],
+                mesh_cfg.shallow_color[2],
+            );
+            gl.uniform_3_f32(
+                gl.get_uniform_location(lp, "u_deep_color").as_ref(),
+                mesh_cfg.deep_color[0],
+                mesh_cfg.deep_color[1],
+                mesh_cfg.deep_color[2],
+            );
+            gl.uniform_4_f32(
+                gl.get_uniform_location(lp, "u_mat_params").as_ref(),
+                mesh_cfg.opacity,
+                mesh_cfg.absorption,
+                mesh_cfg.foam_intensity,
+                mesh_cfg.metallic,
+            );
+            gl.uniform_1_f32(
+                gl.get_uniform_location(lp, "u_exposure").as_ref(),
+                mesh_cfg.exposure,
+            );
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(smooth_depth_tex));
+            gl.uniform_1_i32(gl.get_uniform_location(lp, "t_smooth_depth").as_ref(), 0);
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(thick_tex));
+            gl.uniform_1_i32(gl.get_uniform_location(lp, "t_thickness").as_ref(), 1);
+        }
 
         gl.bind_vertex_array(Some(self.line_vao));
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.line_vbo));
@@ -1436,6 +1552,13 @@ void main() {
 
         gl.line_width(width);
         gl.draw_arrays(glow::LINES, 0, lines.len() as i32);
+
+        if is_submerged {
+            for unit in [glow::TEXTURE1, glow::TEXTURE0] {
+                gl.active_texture(unit);
+                gl.bind_texture(glow::TEXTURE_2D, None);
+            }
+        }
     }
 
     /// Composite front and underwater collider/scene wireframes over SSFR depth so
@@ -1444,7 +1567,12 @@ void main() {
     unsafe fn draw_ssfr_wireframe_overlay(
         &mut self,
         gl: &Arc<glow::Context>,
+        view: Mat4,
         view_proj: Mat4,
+        vp_rect: [i32; 4],
+        mesh_cfg: &SurfaceMeshConfig,
+        smooth_depth_tex: NativeTexture,
+        thick_tex: NativeTexture,
         chamber: &crate::sph::chamber::Chamber,
         bounds: Aabb,
         colliders: &[Collider],
@@ -1468,13 +1596,16 @@ void main() {
         self.line_scratch.clear();
         Self::append_collider_lines(colliders, is_2d, &mut self.line_scratch);
         if !self.line_scratch.is_empty() {
-            let submerged_col = if self.env_preset.is_light_backdrop() {
-                [0.10, 0.38, 0.74, 0.42]
-            } else {
-                [0.42, 0.78, 1.0, 0.40]
-            };
+            let base_col = self.wireframe_color();
             gl.depth_func(glow::GREATER);
-            self.draw_line_batch(gl, view_proj, submerged_col, 1.35, &self.line_scratch);
+            self.draw_line_batch(
+                gl,
+                view_proj,
+                base_col,
+                1.35,
+                &self.line_scratch,
+                Some((view, vp_rect, mesh_cfg, smooth_depth_tex, thick_tex)),
+            );
         }
         gl.depth_func(glow::LEQUAL);
     }
@@ -2110,7 +2241,7 @@ void main() {
             }
             gl.bind_vertex_array(None);
 
-            // Pass A: Background (Studio Sky Gradient + Floor Grid + Chamber & Obstacle Wireframes)
+            // Pass A: Background (Studio Sky Gradient + Floor Grid + Chamber & Fixture Wireframes; colliders handled cleanly in Pass F)
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(bg_fbo));
             gl.viewport(0, 0, vp_w, vp_h);
             gl.clear_depth_f32(1.0);
@@ -2120,7 +2251,7 @@ void main() {
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(true);
             self.draw_scene_wireframes(
-                gl, view_proj, chamber, bounds, colliders, faucets, drains, is_2d,
+                gl, view_proj, chamber, bounds, &[], faucets, drains, is_2d,
             );
 
             let tan_half_fov = (fov_y * 0.5).tan().max(1e-4);
@@ -2382,9 +2513,21 @@ void main() {
                 gl.bind_texture(glow::TEXTURE_2D, None);
             }
 
-            // Pass F: Depth-aware front & underwater wireframes so OBJ models remain visible both in front of and behind liquid
+            // Pass F: Depth-aware front & fogged underwater wireframes matching fluid translucency
             self.draw_ssfr_wireframe_overlay(
-                gl, view_proj, chamber, bounds, colliders, faucets, drains, is_2d,
+                gl,
+                view,
+                view_proj,
+                vp_rect,
+                mesh_cfg,
+                blur_final_tex,
+                thick_tex,
+                chamber,
+                bounds,
+                colliders,
+                faucets,
+                drains,
+                is_2d,
             );
 
             // Clean VAO/VBO/OpenGL state for egui
