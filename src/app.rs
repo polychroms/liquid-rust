@@ -18,6 +18,10 @@ use crate::sph::solver::{
 use crate::sph::{
     Chamber, ChamberShape, Collider, ColliderShape, CubeFace, Drain, Faucet, FaucetShape, Particle,
 };
+use crate::tutorial_player::{
+    TutorialPlayer, TutorialStatus, TUTORIAL_DURATION_SECS, TUTORIAL_HEIGHT, TUTORIAL_WEB_URL,
+    TUTORIAL_WIDTH,
+};
 use crate::updater::{
     cleanup_old_binary, format_bytes, restart_into_updated_binary, UpdatePhase, UpdaterHandle,
     CURRENT_VERSION,
@@ -712,6 +716,10 @@ pub struct LiquidApp {
 
     // GitHub Release self-updater state
     pub updater: UpdaterHandle,
+
+    // In-app tutorial video player state
+    pub tutorial_player: TutorialPlayer,
+    pub tutorial_prev_playing: Option<bool>,
 }
 
 impl LiquidApp {
@@ -764,7 +772,9 @@ impl LiquidApp {
         app.apply_guided_render_preset(GuidedRenderPreset::RecommendedHd);
         app.render_auto_save_png = true;
         app.theme_applied = true;
-        app.show_tutorial_modal = !Self::load_tutorial_seen();
+        if !Self::load_tutorial_seen() {
+            app.open_tutorial(&cc.egui_ctx);
+        }
         app.updater
             .spawn_check(Some(cc.egui_ctx.clone()), false);
         app
@@ -927,6 +937,11 @@ impl LiquidApp {
             })),
             bg_render_cancel: Arc::new(AtomicBool::new(false)),
             updater: UpdaterHandle::new(),
+            tutorial_player: TutorialPlayer::new(
+                Self::config_file_path("liquid-rust-training.mp4")
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf())),
+            ),
+            tutorial_prev_playing: None,
         }
     }
 
@@ -989,9 +1004,22 @@ impl LiquidApp {
         }
     }
 
+    fn open_tutorial(&mut self, ctx: &egui::Context) {
+        if !self.show_tutorial_modal {
+            self.tutorial_prev_playing = Some(self.is_playing);
+            self.is_playing = false;
+        }
+        self.show_tutorial_modal = true;
+        self.tutorial_player.start(ctx.clone(), 0.0);
+    }
+
     fn dismiss_tutorial(&mut self) {
         self.show_tutorial_modal = false;
+        self.tutorial_player.stop();
         Self::save_tutorial_seen();
+        if let Some(prev) = self.tutorial_prev_playing.take() {
+            self.is_playing = prev;
+        }
     }
 
     #[inline]
@@ -7748,8 +7776,20 @@ impl eframe::App for LiquidApp {
             ctx.request_repaint();
         }
 
-        // Studio keyboard shortcuts (only when not typing into a text input widget)
-        if !ctx.wants_keyboard_input() {
+        // Route Space / Escape to active tutorial video player instead of simulation shortcuts
+        if self.show_tutorial_modal {
+            let mut tut_esc = false;
+            let mut tut_space = false;
+            ctx.input(|i| {
+                tut_esc = i.key_pressed(egui::Key::Escape);
+                tut_space = i.key_pressed(egui::Key::Space);
+            });
+            if tut_esc {
+                self.dismiss_tutorial();
+            } else if tut_space {
+                self.tutorial_player.toggle_play(ctx.clone());
+            }
+        } else if !ctx.wants_keyboard_input() {
             let mut key_space = false;
             let mut key_step = false;
             let mut key_reset = false;
@@ -8187,7 +8227,11 @@ impl eframe::App for LiquidApp {
                         .on_hover_text("Watch 64-second LiquidRust Studio tutorial video")
                         .clicked()
                         {
-                            self.show_tutorial_modal = !self.show_tutorial_modal;
+                            if self.show_tutorial_modal {
+                                self.dismiss_tutorial();
+                            } else {
+                                self.open_tutorial(ctx);
+                            }
                         }
 
                         if Self::icon_button(ui, UiIcon::Image, "PNG", false, None)
@@ -9753,54 +9797,137 @@ impl eframe::App for LiquidApp {
             self.show_shortcuts_modal = open;
         }
 
-        // 6B. First-Time Tutorial Video Prompt Modal (with Skip Tutorial button)
+        // 6B. In-App First-Time Tutorial Video Player Modal (with Skip Tutorial button)
         if self.show_tutorial_modal {
-            const TUTORIAL_WEB_URL: &str = "https://fluids.polychroms.dev/?tutorial=1";
             let mut open = self.show_tutorial_modal;
             let mut dismiss = false;
-            egui::Window::new("Welcome to LiquidRust — Studio Tutorial")
+            let max_w = (ctx.screen_rect().width() - 56.0).clamp(360.0, 780.0);
+            let aspect = TUTORIAL_HEIGHT as f32 / TUTORIAL_WIDTH as f32;
+            let video_size = egui::vec2(max_w, max_w * aspect);
+
+            egui::Window::new("Welcome to LiquidRust — 64s Studio Tutorial")
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.set_min_width(410.0);
-                    ui.label(
-                        egui::RichText::new("64-Second Video Walkthrough")
-                            .strong()
-                            .size(15.0),
+                    ui.set_width(video_size.x);
+                    let status = self.tutorial_player.status();
+                    let cur_pos = self.tutorial_player.position_secs();
+                    let tex_id = self.tutorial_player.texture(ctx).map(|t| t.id());
+
+                    let (rect, vid_resp) =
+                        ui.allocate_exact_size(video_size, egui::Sense::click());
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(6),
+                        egui::Color32::from_rgb(8, 11, 18),
                     );
-                    ui.add_space(4.0);
-                    ui.label(
-                        "New to LiquidRust? Watch the quick guided tour of viewport navigation, \
-                         the Scene, Physics, Visuals, and Render tabs, and headless CLI MP4 export.",
-                    );
+
+                    if let Some(tid) = tex_id {
+                        ui.painter().image(
+                            tid,
+                            rect,
+                            egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            ),
+                            egui::Color32::WHITE,
+                        );
+                    }
+
+                    match &status {
+                        TutorialStatus::Loading(msg) => {
+                            let overlay = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                ui.centered_and_justified(|ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.add_space(video_size.y * 0.42);
+                                        ui.spinner();
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new(msg)
+                                                .color(egui::Color32::from_rgb(226, 236, 248)),
+                                        );
+                                    });
+                                });
+                            });
+                            let _ = overlay;
+                        }
+                        TutorialStatus::Error(err) => {
+                            let _ = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(video_size.y * 0.36);
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(255, 165, 120),
+                                        err.as_str(),
+                                    );
+                                    ui.add_space(8.0);
+                                    if ui.button("Open Tutorial in Browser").clicked() {
+                                        ctx.open_url(egui::OpenUrl::new_tab(TUTORIAL_WEB_URL));
+                                        dismiss = true;
+                                    }
+                                });
+                            });
+                        }
+                        _ => {
+                            if vid_resp.clicked() {
+                                self.tutorial_player.toggle_play(ctx.clone());
+                            }
+                        }
+                    }
+
                     ui.add_space(8.0);
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        for line in [
-                            "1. Viewport & Controls — Right-drag orbit, Left-drag attract",
-                            "2. Scene Tab — Presets, faucets, obstacles & .obj meshes",
-                            "3. Physics Tab — Viscosity presets (Honey, Mercury, Water)",
-                            "4. Visuals & Render Tabs — SSFR, 3D mesh & Studio MP4",
-                        ] {
-                            ui.small(line);
-                        }
-                    });
-                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if Self::icon_button(ui, UiIcon::Film, "Watch Tutorial Video", true, None)
-                            .on_hover_text("Open the 64s tutorial video in your browser")
-                            .clicked()
-                        {
-                            ctx.open_url(egui::OpenUrl::new_tab(TUTORIAL_WEB_URL));
-                            dismiss = true;
+                        let (play_icon, play_lbl) = match status {
+                            TutorialStatus::Playing | TutorialStatus::Loading(_) => {
+                                (UiIcon::Pause, "Pause")
+                            }
+                            TutorialStatus::Ended => (UiIcon::Reset, "Replay"),
+                            _ => (UiIcon::Play, "Play"),
+                        };
+                        if Self::icon_button(ui, play_icon, play_lbl, false, None).clicked() {
+                            self.tutorial_player.toggle_play(ctx.clone());
                         }
-                        if ui.button("Skip Tutorial").clicked() {
-                            dismiss = true;
+
+                        let mut scrub = cur_pos;
+                        let slider_w = (video_size.x - 335.0).max(110.0);
+                        ui.spacing_mut().slider_width = slider_w;
+                        let s_resp = ui.add(
+                            egui::Slider::new(&mut scrub, 0.0..=TUTORIAL_DURATION_SECS)
+                                .show_value(false),
+                        );
+                        if s_resp.drag_stopped() || (s_resp.clicked() && !s_resp.dragged()) {
+                            self.tutorial_player.seek(ctx.clone(), scrub);
                         }
+
+                        let mins = (cur_pos as u32) / 60;
+                        let secs = (cur_pos as u32) % 60;
+                        let tot_m = (TUTORIAL_DURATION_SECS as u32) / 60;
+                        let tot_s = (TUTORIAL_DURATION_SECS as u32) % 60;
+                        ui.monospace(format!("{:02}:{:02} / {:02}:{:02}", mins, secs, tot_m, tot_s));
+
+                        let mute_lbl = if self.tutorial_player.muted {
+                            "Muted"
+                        } else {
+                            "Sound"
+                        };
+                        if ui.button(mute_lbl).clicked() {
+                            self.tutorial_player.toggle_mute(ctx.clone());
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let skip_lbl = if status == TutorialStatus::Ended {
+                                "Start Simulating"
+                            } else {
+                                "Skip Tutorial"
+                            };
+                            if ui.button(skip_lbl).clicked() {
+                                dismiss = true;
+                            }
+                        });
                     });
                 });
+
             if dismiss || !open {
                 self.dismiss_tutorial();
             }

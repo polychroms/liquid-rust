@@ -5,6 +5,7 @@ pub mod math;
 pub mod render;
 pub mod scene_io;
 pub mod sph;
+pub mod tutorial_player;
 pub mod updater;
 
 pub use app::{
