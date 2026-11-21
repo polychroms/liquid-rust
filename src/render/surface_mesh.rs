@@ -58,6 +58,7 @@ pub enum FluidMaterialPreset {
     MoltenAmber,
     CrimsonWine,
     EmeraldGel,
+    RoyalPurple,
     Milk,
     LiquidChrome,
     Custom,
@@ -71,6 +72,7 @@ impl FluidMaterialPreset {
         FluidMaterialPreset::MoltenAmber,
         FluidMaterialPreset::CrimsonWine,
         FluidMaterialPreset::EmeraldGel,
+        FluidMaterialPreset::RoyalPurple,
         FluidMaterialPreset::Milk,
         FluidMaterialPreset::LiquidChrome,
         FluidMaterialPreset::Custom,
@@ -84,6 +86,7 @@ impl FluidMaterialPreset {
             FluidMaterialPreset::MoltenAmber => "Molten Amber (Honey Gold)",
             FluidMaterialPreset::CrimsonWine => "Crimson Wine (Ruby)",
             FluidMaterialPreset::EmeraldGel => "Emerald Gel (Jade)",
+            FluidMaterialPreset::RoyalPurple => "Royal Amethyst (Purple)",
             FluidMaterialPreset::Milk => "Creamy Milk (Subsurface)",
             FluidMaterialPreset::LiquidChrome => "Liquid Chrome (Mercury)",
             FluidMaterialPreset::Custom => "Custom Material",
@@ -98,6 +101,7 @@ impl FluidMaterialPreset {
             FluidMaterialPreset::MoltenAmber => "amber",
             FluidMaterialPreset::CrimsonWine => "wine",
             FluidMaterialPreset::EmeraldGel => "emerald",
+            FluidMaterialPreset::RoyalPurple => "purple",
             FluidMaterialPreset::Milk => "milk",
             FluidMaterialPreset::LiquidChrome => "chrome",
             FluidMaterialPreset::Custom => "custom",
@@ -112,6 +116,9 @@ impl FluidMaterialPreset {
             "amber" | "honey" | "gold" | "lava" => FluidMaterialPreset::MoltenAmber,
             "wine" | "crimson" | "ruby" | "blood" => FluidMaterialPreset::CrimsonWine,
             "emerald" | "jade" | "slime" => FluidMaterialPreset::EmeraldGel,
+            "purple" | "amethyst" | "violet" | "lavender" | "grape" => {
+                FluidMaterialPreset::RoyalPurple
+            }
             "milk" | "cream" => FluidMaterialPreset::Milk,
             "chrome" | "mercury" | "metal" | "silver" => FluidMaterialPreset::LiquidChrome,
             _ => FluidMaterialPreset::Custom,
@@ -204,6 +211,20 @@ impl FluidMaterialPreset {
                 cfg.env_reflection = 0.78;
                 cfg.metallic = 0.0;
                 cfg.foam_intensity = 0.18;
+            }
+            FluidMaterialPreset::RoyalPurple => {
+                cfg.shallow_color = [0.69, 0.34, 0.98];
+                cfg.deep_color = [0.16, 0.025, 0.34];
+                cfg.opacity = 0.78;
+                cfg.absorption = 2.9;
+                cfg.ior = 1.40;
+                cfg.roughness = 0.055;
+                cfg.specular_intensity = 1.45;
+                cfg.refraction_strength = 0.54;
+                cfg.subsurface_scattering = 0.72;
+                cfg.env_reflection = 0.85;
+                cfg.metallic = 0.0;
+                cfg.foam_intensity = 0.22;
             }
             FluidMaterialPreset::Milk => {
                 cfg.shallow_color = [0.97, 0.96, 0.93];
@@ -1912,3 +1933,25 @@ pub const MC_TRI_TABLE: [[i8; 16]; 256] = [
     [0, 3, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
     [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{FluidMaterialPreset, SurfaceMeshConfig};
+
+    #[test]
+    fn royal_purple_preset_slugs_and_optics() {
+        assert!(FluidMaterialPreset::ALL.contains(&FluidMaterialPreset::RoyalPurple));
+        for alias in ["purple", "amethyst", "violet", "lavender", "grape"] {
+            assert_eq!(FluidMaterialPreset::from_slug(alias), FluidMaterialPreset::RoyalPurple);
+        }
+        assert_eq!(FluidMaterialPreset::RoyalPurple.slug(), "purple");
+
+        let mut cfg = SurfaceMeshConfig::default();
+        FluidMaterialPreset::RoyalPurple.apply(&mut cfg);
+        assert_eq!(cfg.preset, FluidMaterialPreset::RoyalPurple);
+        assert!(cfg.shallow_color[2] > cfg.shallow_color[0]);
+        assert!(cfg.shallow_color[0] > cfg.shallow_color[1]);
+        assert!(cfg.deep_color[2] > cfg.deep_color[0]);
+        assert!(cfg.deep_color[0] > cfg.deep_color[1]);
+    }
+}

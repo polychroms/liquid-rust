@@ -82,6 +82,7 @@ public final class SimulationConfig {
         new MaterialPreset("Molten Amber",  0xFCB82E, 0x5C1403, 1.540f, 0.055f, 1.45f, 0.52f, 0.00f, 0.12f),
         new MaterialPreset("Crimson Wine",  0xE12D58, 0x2B0410, 1.360f, 0.050f, 1.30f, 0.32f, 0.00f, 0.10f),
         new MaterialPreset("Emerald Gel",   0x33EB85, 0x03381F, 1.520f, 0.042f, 1.50f, 0.48f, 0.00f, 0.15f),
+        new MaterialPreset("Royal Purple",  0xB057FA, 0x290657, 1.400f, 0.055f, 1.45f, 0.54f, 0.00f, 0.22f),
         new MaterialPreset("Creamy Milk",   0xFAFCFF, 0xCBD5E1, 1.350f, 0.180f, 0.85f, 0.08f, 0.00f, 0.05f),
         new MaterialPreset("Liquid Chrome", 0xE6ECF5, 0x5A677D, 2.400f, 0.025f, 2.30f, 0.00f, 0.94f, 0.00f)
     };

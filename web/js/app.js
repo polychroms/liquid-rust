@@ -11,7 +11,7 @@ import { WebGpuRenderer } from './webgpu-renderer.js?v=20261120b';
 
 const RELEASE_LATEST = 'https://github.com/polychroms/liquid-rust/releases/latest';
 const RELEASE_DL = `${RELEASE_LATEST}/download`;
-const RELEASE_VER_DL = 'https://github.com/polychroms/liquid-rust/releases/download/v1.0.0';
+const RELEASE_VER_DL = 'https://github.com/polychroms/liquid-rust/releases/download/v1.0.1';
 const ANDROID_APK_URL = `${RELEASE_DL}/liquid-rust-android.apk`;
 const IOS_IPA_URL = `${RELEASE_DL}/liquid-rust-ios.ipa`;
 
@@ -22,6 +22,7 @@ const MATERIAL_PRESETS = {
     amber:   { shallow: '#fcb82e', deep: '#5c1403', ior: 1.540, roughness: 0.055, specular: 1.45, refraction: 0.52, metallic: 0.00, foam: 0.12 },
     wine:    { shallow: '#c71f47', deep: '#24030d', ior: 1.360, roughness: 0.050, specular: 1.30, refraction: 0.32, metallic: 0.00, foam: 0.10 },
     emerald: { shallow: '#33eb85', deep: '#03381f', ior: 1.520, roughness: 0.042, specular: 1.50, refraction: 0.48, metallic: 0.00, foam: 0.15 },
+    purple:  { shallow: '#b057fa', deep: '#290657', ior: 1.400, roughness: 0.055, specular: 1.45, refraction: 0.54, metallic: 0.00, foam: 0.22 },
     milk:    { shallow: '#fafcff', deep: '#d9e3f0', ior: 1.350, roughness: 0.180, specular: 0.85, refraction: 0.08, metallic: 0.00, foam: 0.05 },
     chrome:  { shallow: '#e6ecf5', deep: '#6a788e', ior: 2.400, roughness: 0.025, specular: 2.30, refraction: 0.00, metallic: 0.94, foam: 0.00 },
 };

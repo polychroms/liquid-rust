@@ -271,7 +271,7 @@ struct Args {
     camera_orbit: Option<f32>,
 
     // ======================== SURFACE MESH & PBR OPTICS ========================
-    /// Surface mesh material preset: water [default], ocean, lagoon, amber, wine, emerald, milk, chrome, custom
+    /// Surface mesh material preset: water [default], ocean, lagoon, amber, wine, emerald, purple, milk, chrome, custom
     #[arg(long, help_heading = "Surface Mesh & PBR Optics")]
     mesh_material: Option<String>,
 
